@@ -17,6 +17,17 @@ import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  getSession,
+  loginAccount,
+  logoutAccount,
+  migrateLegacyGuest,
+  readLegacyLocalProfile,
+  registerAccount,
+  type Session,
+  updateAccountName,
+} from "@/lib/auth";
+import { loadUserValue, saveUserValue } from "@/lib/user-data";
 
 type TabKey = "home" | "workouts" | "nutrition" | "progress" | "coach" | "profile";
 type WorkoutStage = "Riscaldamento" | "Allenamento" | "Stretching";
@@ -150,39 +161,236 @@ const RECIPES = [
 const WEIGHT_SEED = [{ date: "2 set", value: 77.8 }, { date: "6 set", value: 77.4 }, { date: "10 set", value: 77.2 }, { date: "14 set", value: 76.8 }, { date: "18 set", value: 76.5 }, { date: "23 set", value: 76.2 }];
 const HEART_SEED = [{ label: "Lun", rest: 64, workout: 128 }, { label: "Mar", rest: 63, workout: 134 }, { label: "Mer", rest: 62, workout: 131 }, { label: "Gio", rest: 62, workout: 139 }, { label: "Ven", rest: 61, workout: 136 }, { label: "Sab", rest: 61, workout: 142 }, { label: "Oggi", rest: 60, workout: 137 }];
 
-function usePersistentState<T>(key: string, fallback: T) {
+function useUserState<T>(userId: string, key: string, fallback: T) {
   const [value, setValue] = useState<T>(fallback);
   const [ready, setReady] = useState(false);
-  useEffect(() => { try { const saved = window.localStorage.getItem(key); if (saved) setValue(JSON.parse(saved) as T); } catch {} setReady(true); }, [key]);
-  useEffect(() => { if (ready) window.localStorage.setItem(key, JSON.stringify(value)); }, [key, ready, value]);
+  useEffect(() => {
+    let cancelled = false;
+    setReady(false);
+    loadUserValue(userId, key, fallback).then((loaded) => {
+      if (!cancelled) {
+        setValue(loaded);
+        setReady(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, key]);
+  useEffect(() => {
+    if (ready) void saveUserValue(userId, key, value);
+  }, [userId, key, ready, value]);
   return [value, setValue] as const;
 }
+
 function initials(name: string) { return name.split(" ").map((part) => part[0]).join("").slice(0, 2).toUpperCase(); }
 function formatTimer(seconds: number) { return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`; }
 function bmi(profile: Profile) { const meters = profile.height / 100; return profile.weight / (meters * meters); }
 function calorieTarget(profile: Profile) { const bmr = 10 * profile.weight + 6.25 * profile.height - 5 * profile.age + 5; return Math.round(bmr * 1.42 - 380); }
 
+function AuthScreen({ onAuthenticated }: { onAuthenticated: (session: Session) => void }) {
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [email, setEmail] = useState("");
+  const [name, setName] = useState(readLegacyLocalProfile()?.name ?? "");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const legacy = readLegacyLocalProfile();
+
+  const submit = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const session =
+        mode === "login"
+          ? await loginAccount({ email, password })
+          : await registerAccount({ email, name, password });
+      onAuthenticated(session);
+      toast.success(mode === "login" ? "Accesso effettuato" : "Account creato");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Operazione non riuscita");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const restoreLegacy = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const session = await migrateLegacyGuest();
+      if (!session) throw new Error("Nessun dato locale da ripristinare.");
+      onAuthenticated(session);
+      toast.success("Sessione locale ripristinata (password iniziale: gymfood)");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Ripristino non riuscito");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="auth-shell">
+      <div className="auth-card">
+        <div className="auth-brand">
+          <span className="brand-mark"><Dumbbell className="brand-gym-icon" size={22} /><Utensils className="brand-food-icon" size={17} /></span>
+          <strong><b>GYM</b><i>&</i><b>FOOD</b></strong>
+          <p>Allenati. Nutriti. Migliora — con account reale e dati nel tuo dispositivo.</p>
+        </div>
+        <div className="segment-control auth-toggle">
+          <button className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>Accedi</button>
+          <button className={mode === "register" ? "active" : ""} onClick={() => setMode("register")}>Crea account</button>
+        </div>
+        <div className="form-stack">
+          {mode === "register" && (
+            <label>Nome
+              <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Il tuo nome" />
+            </label>
+          )}
+          <label>Email
+            <Input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="tu@email.com" />
+          </label>
+          <label>Password
+            <Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Almeno 6 caratteri" />
+          </label>
+          {error && <p className="auth-error">{error}</p>}
+          <button className="primary-button full" disabled={busy} onClick={() => void submit()}>
+            {busy ? "Attendere…" : mode === "login" ? "Entra" : "Registrati"}
+          </button>
+          {legacy && (
+            <button className="secondary-button full" disabled={busy} onClick={() => void restoreLegacy()}>
+              Ripristina dati locali di {legacy.name}
+            </button>
+          )}
+        </div>
+        <p className="auth-note">Password hashata con PBKDF2. I dati restano in IndexedDB su questo dispositivo; puoi sincronizzare sul cloud da Profilo.</p>
+      </div>
+    </div>
+  );
+}
+
 export default function HomePage() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [bootstrapping, setBootstrapping] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const current = await getSession();
+      if (!cancelled) {
+        setSession(current);
+        setBootstrapping(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (bootstrapping) {
+    return <div className="auth-shell"><div className="auth-card"><p>Caricamento GYM & FOOD…</p></div></div>;
+  }
+  if (!session) {
+    return (
+      <>
+        <AuthScreen onAuthenticated={setSession} />
+        <Toaster position="top-center" richColors />
+      </>
+    );
+  }
+  return <AuthenticatedApp session={session} onSessionChange={setSession} />;
+}
+
+function AuthenticatedApp({ session, onSessionChange }: { session: Session; onSessionChange: (session: Session | null) => void }) {
   const [tab, setTab] = useTabNavigation();
-  const [profile, setProfile] = usePersistentState<Profile>("addome-profile", { name: "Andrea", age: 36, height: 178, weight: 76.2, goalWeight: 70, weeklyGoal: 4 });
-  const [meals, setMeals] = usePersistentState<Meal[]>("addome-meals", DEFAULT_MEALS);
-  const [shopping, setShopping] = usePersistentState<ShoppingItem[]>("addome-shopping", DEFAULT_SHOPPING);
-  const [weightData, setWeightData] = usePersistentState("addome-weight", WEIGHT_SEED);
-  const [completedWorkout, setCompletedWorkout] = usePersistentState("addome-workout-done", false);
-  const [water, setWater] = usePersistentState("addome-water", 5);
-  const [steps, setSteps] = usePersistentState("addome-steps", 6840);
-  const [voiceEnabled, setVoiceEnabled] = usePersistentState("addome-voice", true);
+  const [profile, setProfile] = useUserState<Profile>(session.accountId, "addome-profile", {
+    name: session.name,
+    age: 36,
+    height: 178,
+    weight: 76.2,
+    goalWeight: 70,
+    weeklyGoal: 4,
+  });
+  const [meals, setMeals] = useUserState<Meal[]>(session.accountId, "addome-meals", DEFAULT_MEALS);
+  const [shopping, setShopping] = useUserState<ShoppingItem[]>(session.accountId, "addome-shopping", DEFAULT_SHOPPING);
+  const [weightData, setWeightData] = useUserState(session.accountId, "addome-weight", WEIGHT_SEED);
+  const [completedWorkout, setCompletedWorkout] = useUserState(session.accountId, "addome-workout-done", false);
+  const [water, setWater] = useUserState(session.accountId, "addome-water", 5);
+  const [steps, setSteps] = useUserState(session.accountId, "addome-steps", 6840);
+  const [voiceEnabled, setVoiceEnabled] = useUserState(session.accountId, "addome-voice", true);
   const [workoutOpen, setWorkoutOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const consumed = meals.filter((meal) => meal.checked).reduce((sum, meal) => sum + meal.calories, 0);
   const target = calorieTarget(profile);
+
+  useEffect(() => {
+    if (profile.name !== session.name) {
+      void updateAccountName(session.accountId, profile.name).then((next) => {
+        if (next) onSessionChange(next);
+      });
+    }
+  }, [profile.name, session.accountId, session.name, onSessionChange]);
+
+  const syncCloud = async (action: "pull" | "push") => {
+    const snapshot = { profile, meals, shopping, weightData, water, steps, voiceEnabled, completedWorkout };
+    try {
+      const response = await fetch("/api/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action,
+          accountId: session.accountId,
+          email: session.email,
+          payload: action === "push" ? snapshot : undefined,
+        }),
+      });
+      const result = await response.json() as { ok?: boolean; error?: string; payload?: typeof snapshot | null };
+      if (!response.ok || !result.ok) throw new Error(result.error || "Sync non disponibile");
+      if (action === "pull" && result.payload) {
+        setProfile(result.payload.profile);
+        setMeals(result.payload.meals);
+        setShopping(result.payload.shopping);
+        setWeightData(result.payload.weightData);
+        setWater(result.payload.water);
+        setSteps(result.payload.steps);
+        setVoiceEnabled(result.payload.voiceEnabled);
+        setCompletedWorkout(result.payload.completedWorkout);
+        toast.success("Dati scaricati dal cloud");
+      } else if (action === "push") {
+        toast.success("Dati sincronizzati sul cloud");
+      } else {
+        toast("Nessun backup cloud trovato");
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Sync non riuscita");
+    }
+  };
+
   const renderView = () => {
     if (tab === "home") return <Dashboard profile={profile} steps={steps} setSteps={setSteps} water={water} setWater={setWater} consumed={consumed} target={target} workoutDone={completedWorkout} startWorkout={() => setWorkoutOpen(true)} goTo={setTab} />;
     if (tab === "workouts") return <Workouts startWorkout={() => setWorkoutOpen(true)} workoutDone={completedWorkout} />;
-    if (tab === "nutrition") return <Nutrition meals={meals} setMeals={setMeals} shopping={shopping} setShopping={setShopping} target={target} />;
+    if (tab === "nutrition") return <Nutrition userId={session.accountId} meals={meals} setMeals={setMeals} shopping={shopping} setShopping={setShopping} target={target} />;
     if (tab === "progress") return <ProgressAndHealth profile={profile} weightData={weightData} setWeightData={setWeightData} />;
-    if (tab === "coach") return <Coach profile={profile} voiceEnabled={voiceEnabled} setVoiceEnabled={setVoiceEnabled} />;
-    return <ProfileView profile={profile} setProfile={setProfile} target={target} voiceEnabled={voiceEnabled} setVoiceEnabled={setVoiceEnabled} openEditor={() => setProfileOpen(true)} exportData={() => exportAllData({ profile, meals, shopping, weightData, water, steps })} />;
+    if (tab === "coach") return <Coach userId={session.accountId} profile={profile} voiceEnabled={voiceEnabled} setVoiceEnabled={setVoiceEnabled} />;
+    return (
+      <ProfileView
+        userId={session.accountId}
+        profile={profile}
+        setProfile={setProfile}
+        target={target}
+        voiceEnabled={voiceEnabled}
+        setVoiceEnabled={setVoiceEnabled}
+        openEditor={() => setProfileOpen(true)}
+        exportData={() => exportAllData({ profile, meals, shopping, weightData, water, steps })}
+        email={session.email}
+        onLogout={async () => {
+          await logoutAccount();
+          onSessionChange(null);
+        }}
+        onCloudPush={() => void syncCloud("push")}
+        onCloudPull={() => void syncCloud("pull")}
+      />
+    );
   };
   return (
     <div className="app-shell">
@@ -190,7 +398,7 @@ export default function HomePage() {
         <button className="brand" onClick={() => setTab("home")} aria-label="Vai alla home di GYM & FOOD"><span className="brand-mark"><Dumbbell className="brand-gym-icon" size={22} /><Utensils className="brand-food-icon" size={17} /></span><span className="brand-copy"><strong><b>GYM</b><i>&</i><b>FOOD</b></strong><small>TRAIN · EAT · EVOLVE</small></span></button>
         <nav className="side-nav" aria-label="Navigazione principale"><span className="nav-caption">PERCORSO</span>{NAV.map(({ key, label, icon: Icon }) => <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}><Icon size={20} strokeWidth={2.1} /><span>{label}</span>{key === "coach" && <i className="nav-new">AI</i>}</button>)}</nav>
         <div className="rail-card"><span className="rail-card-icon"><Sparkles size={17} /></span><strong>Settimana 4</strong><p>La base è solida. Questa settimana consolidiamo tecnica e ritmo.</p><div className="mini-progress"><span style={{ width: "33%" }} /></div><small>4 di 12</small></div>
-        <button className="rail-profile" onClick={() => setProfileOpen(true)}><span className="avatar">{initials(profile.name)}</span><span><strong>{profile.name}</strong><small>Profilo personale</small></span><Settings2 size={17} /></button>
+        <button className="rail-profile" onClick={() => setProfileOpen(true)}><span className="avatar">{initials(profile.name)}</span><span><strong>{profile.name}</strong><small>{session.email}</small></span><Settings2 size={17} /></button>
       </aside>
       <div className="app-body"><header className="topbar"><div className="topbar-date"><span>MERCOLEDÌ</span><strong>23 SETTEMBRE</strong></div><div className="top-actions"><div className="device-pill"><Watch size={17} /><span>Watch</span><i /></div><button className="icon-button" aria-label="Cerca" onClick={() => toast("La ricerca globale sarà disponibile nel prossimo aggiornamento")}><Search size={19} /></button><button className="profile-chip" onClick={() => setProfileOpen(true)}><span>{initials(profile.name)}</span></button></div></header><main className="main-surface">{renderView()}</main></div>
       <nav className="mobile-nav" aria-label="Navigazione mobile">{NAV.map(({ key, label, icon: Icon }) => <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}><Icon size={20} /><span>{label === "Alimentazione" ? "Cibo" : label}</span></button>)}</nav>
@@ -230,8 +438,8 @@ function Workouts({ startWorkout, workoutDone }: { startWorkout: () => void; wor
 function PhaseHeader({ number, title, subtitle, color }: { number: string; title: string; subtitle: string; color: string }) { return <div className={`phase-header ${color}`}><span>{number}</span><div><strong>{title}</strong><small>{subtitle}</small></div></div>; }
 function ExerciseRow({ exercise, compact = false }: { exercise: Exercise; compact?: boolean }) { return <div className="exercise-row"><span className="exercise-play"><Play size={14} fill="currentColor" /></span><div><strong>{exercise.name}{exercise.side ? ` · ${exercise.side}` : ""}</strong><small>{exercise.focus}</small></div>{exercise.set && <span className="set-badge">Serie {exercise.set}</span>}<span className="duration"><Clock3 size={14} /> {exercise.seconds}s</span>{!compact && <a href={`https://www.youtube.com/watch?v=${exercise.videoId}`} target="_blank" rel="noreferrer" aria-label={`Apri il video di ${exercise.name}`}><Video size={17} /></a>}</div>; }
 
-function Nutrition({ meals, setMeals, shopping, setShopping, target }: { meals: Meal[]; setMeals: (meals: Meal[]) => void; shopping: ShoppingItem[]; setShopping: (items: ShoppingItem[]) => void; target: number }) {
-  const [addMealOpen, setAddMealOpen] = useState(false); const [newMeal, setNewMeal] = useState({ slot: "Pranzo", name: "", calories: "", protein: "" }); const [newShopping, setNewShopping] = useState(""); const [favorites, setFavorites] = usePersistentState<string[]>("addome-favorites", ["r1"]);
+function Nutrition({ userId, meals, setMeals, shopping, setShopping, target }: { userId: string; meals: Meal[]; setMeals: (meals: Meal[]) => void; shopping: ShoppingItem[]; setShopping: (items: ShoppingItem[]) => void; target: number }) {
+  const [addMealOpen, setAddMealOpen] = useState(false); const [newMeal, setNewMeal] = useState({ slot: "Pranzo", name: "", calories: "", protein: "" }); const [newShopping, setNewShopping] = useState(""); const [favorites, setFavorites] = useUserState<string[]>(userId, "addome-favorites", ["r1"]);
   const totals = meals.filter((meal) => meal.checked).reduce((sum, meal) => ({ calories: sum.calories + meal.calories, protein: sum.protein + meal.protein, carbs: sum.carbs + meal.carbs, fat: sum.fat + meal.fat }), { calories: 0, protein: 0, carbs: 0, fat: 0 });
   const addMeal = () => { if (!newMeal.name || !newMeal.calories) return; setMeals([...meals, { id: crypto.randomUUID(), slot: newMeal.slot, name: newMeal.name, calories: Number(newMeal.calories), protein: Number(newMeal.protein || 0), carbs: 0, fat: 0, checked: true }]); setNewMeal({ slot: "Pranzo", name: "", calories: "", protein: "" }); setAddMealOpen(false); toast.success("Alimento aggiunto al diario"); };
   return <div className="page-stack"><PageHeading eyebrow="ALIMENTAZIONE" title="Mangia bene, senza complicarti la vita" description="Diario, ricette e spesa lavorano insieme sul tuo obiettivo calorico." action={<button className="primary-button" onClick={() => setAddMealOpen(true)}><Plus size={18} /> Aggiungi alimento</button>} />
@@ -255,8 +463,8 @@ function ProgressAndHealth({ profile, weightData, setWeightData }: { profile: Pr
 }
 function SummaryCard({ label, value, detail, icon: Icon, tone }: { label: string; value: string; detail: string; icon: LucideIcon; tone: string }) { return <article className={`summary-card ${tone}`}><span><Icon size={20} /></span><small>{label}</small><strong>{value}</strong><p>{detail}</p></article>; }
 
-function Coach({ profile, voiceEnabled, setVoiceEnabled }: { profile: Profile; voiceEnabled: boolean; setVoiceEnabled: (value: boolean) => void }) {
-  const [messages, setMessages] = usePersistentState<CoachMessage[]>("addome-coach", [{ id: "welcome", role: "coach", text: `Ciao ${profile.name}. Oggi hai una sessione core di 24 minuti. Come ti senti?` }]); const [draft, setDraft] = useState(""); const endRef = useRef<HTMLDivElement>(null);
+function Coach({ userId, profile, voiceEnabled, setVoiceEnabled }: { userId: string; profile: Profile; voiceEnabled: boolean; setVoiceEnabled: (value: boolean) => void }) {
+  const [messages, setMessages] = useUserState<CoachMessage[]>(userId, "addome-coach", [{ id: "welcome", role: "coach", text: `Ciao ${profile.name}. Oggi hai una sessione core di 24 minuti. Come ti senti?` }]); const [draft, setDraft] = useState(""); const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), [messages]);
   const answer = (text: string) => { const lower = text.toLowerCase(); if (lower.includes("schiena") || lower.includes("dolore")) return "Se senti dolore vero, interrompi. Per oggi sostituisci il Side Plank con Bird Dog e riduci le tenute a 20 secondi. Se il dolore persiste, confrontati con un professionista sanitario."; if (lower.includes("mang") || lower.includes("fame") || lower.includes("cena")) return "Ti restano circa 1.190 kcal nel piano di oggi. Per cena scegli una fonte proteica, verdure e una porzione di carboidrati: ad esempio salmone, patate e insalata."; if (lower.includes("stanco") || lower.includes("sonno")) return "Il recupero risulta buono, ma ascolta la percezione reale: prova il riscaldamento e, se resti scarico, scegli l’intensità più facile senza saltare lo stretching."; if (lower.includes("aument") || lower.includes("difficile")) return "Dopo la sessione registrerò il tuo feedback. Se due allenamenti consecutivi risultano facili, aumenterò una serie; se sono troppo impegnativi, ridurrò tempi o sostituirò l’esercizio."; return "Ricevuto. Tengo conto di questo feedback nel prossimo allenamento. Vuoi che adatti l’intensità, l’esercizio o la durata?"; };
   const send = (preset?: string) => { const text = (preset ?? draft).trim(); if (!text) return; const response = answer(text); setMessages([...messages, { id: crypto.randomUUID(), role: "user", text }, { id: crypto.randomUUID(), role: "coach", text: response }]); setDraft(""); if (voiceEnabled && "speechSynthesis" in window) { window.speechSynthesis.cancel(); const utterance = new SpeechSynthesisUtterance(response); utterance.lang = "it-IT"; utterance.rate = 0.98; window.speechSynthesis.speak(utterance); } };
@@ -264,10 +472,10 @@ function Coach({ profile, voiceEnabled, setVoiceEnabled }: { profile: Profile; v
 }
 function ContextRow({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value: string }) { return <div className="context-row"><span><Icon size={17} /></span><small>{label}</small><strong>{value}</strong></div>; }
 
-function ProfileView({ profile, setProfile, target, voiceEnabled, setVoiceEnabled, openEditor, exportData }: { profile: Profile; setProfile: (profile: Profile) => void; target: number; voiceEnabled: boolean; setVoiceEnabled: (value: boolean) => void; openEditor: () => void; exportData: () => void }) {
+function ProfileView({ userId, profile, setProfile, target, voiceEnabled, setVoiceEnabled, openEditor, exportData, email, onLogout, onCloudPush, onCloudPull }: { userId: string; profile: Profile; setProfile: (profile: Profile) => void; target: number; voiceEnabled: boolean; setVoiceEnabled: (value: boolean) => void; openEditor: () => void; exportData: () => void; email: string; onLogout: () => void | Promise<void>; onCloudPush: () => void; onCloudPull: () => void }) {
   const currentBmi = bmi(profile);
-  const [autoAdapt, setAutoAdapt] = usePersistentState("addome-auto-adapt", true);
-  return <div className="page-stack"><PageHeading eyebrow="PROFILO" title="Il tuo percorso, alle tue condizioni" description="Obiettivi, preferenze e dati personali in un unico posto." action={<button className="secondary-button" onClick={openEditor}><Settings2 size={17} /> Modifica profilo</button>} /><section className="profile-banner"><span className="profile-avatar-large">{initials(profile.name)}</span><div><h2>{profile.name}</h2><p>Percorso Definizione · Settimana 4</p><div><span><Flame size={15} /> 12 giorni</span><span><Star size={15} /> 1.840 XP</span><span><Dumbbell size={15} /> 15 workout</span></div></div><span className="premium-pill"><Sparkles size={15} /> PREMIUM</span></section><section className="summary-grid"><SummaryCard label="Obiettivo peso" value={`${profile.goalWeight} kg`} detail={`${(profile.weight - profile.goalWeight).toFixed(1)} kg rimanenti`} icon={Target} tone="orange" /><SummaryCard label="BMI attuale" value={currentBmi.toFixed(1)} detail={currentBmi < 25 ? "Intervallo nella norma" : "Da leggere con il contesto"} icon={Activity} tone="blue" /><SummaryCard label="Obiettivo calorie" value={`${target} kcal`} detail="Deficit moderato stimato" icon={Flame} tone="orange" /><SummaryCard label="Allenamenti" value={`${profile.weeklyGoal}/sett.`} detail="Obiettivo personale" icon={Dumbbell} tone="green" /></section><section className="settings-layout"><article className="surface-card settings-card"><div className="card-head"><div><span className="card-kicker">PREFERENZE</span><h3>Esperienza</h3></div></div><SettingRow icon={Volume2} label="Guida vocale" detail="Istruzioni durante gli esercizi" control={<Switch checked={voiceEnabled} onCheckedChange={setVoiceEnabled} />} /><SettingRow icon={Watch} label="Dati Apple Watch" detail="Battito e calorie registrati" control={<span className="sync-badge"><span /> Attivo</span>} /><SettingRow icon={Sparkles} label="Adattamento automatico" detail="Serie ed esercizi seguono il feedback" control={<Switch checked={autoAdapt} onCheckedChange={setAutoAdapt} />} /></article><article className="surface-card settings-card"><div className="card-head"><div><span className="card-kicker">I TUOI DATI</span><h3>Backup e portabilità</h3></div></div><button className="settings-action" onClick={exportData}><Download size={18} /><span><strong>Esporta backup</strong><small>Scarica profilo e progressi in JSON</small></span><ChevronRight size={17} /></button><label className="settings-action"><Upload size={18} /><span><strong>Importa backup</strong><small>Ripristina dati da un file</small></span><ChevronRight size={17} /><input type="file" accept="application/json" hidden onChange={(event) => importBackup(event, setProfile)} /></label><button className="settings-action danger" onClick={() => toast("Per sicurezza, il ripristino completo richiede conferma dal profilo iPhone")}><Trash2 size={18} /><span><strong>Ripristina dati</strong><small>Mantiene intatta l’app iPhone</small></span><ChevronRight size={17} /></button></article></section></div>;
+  const [autoAdapt, setAutoAdapt] = useUserState(userId, "addome-auto-adapt", true);
+  return <div className="page-stack"><PageHeading eyebrow="PROFILO" title="Il tuo percorso, alle tue condizioni" description="Obiettivi, preferenze e dati personali in un unico posto." action={<button className="secondary-button" onClick={openEditor}><Settings2 size={17} /> Modifica profilo</button>} /><section className="profile-banner"><span className="profile-avatar-large">{initials(profile.name)}</span><div><h2>{profile.name}</h2><p>{email}</p><div><span><Flame size={15} /> 12 giorni</span><span><Star size={15} /> 1.840 XP</span><span><Dumbbell size={15} /> 15 workout</span></div></div><span className="premium-pill"><Sparkles size={15} /> PREMIUM</span></section><section className="summary-grid"><SummaryCard label="Obiettivo peso" value={`${profile.goalWeight} kg`} detail={`${(profile.weight - profile.goalWeight).toFixed(1)} kg rimanenti`} icon={Target} tone="orange" /><SummaryCard label="BMI attuale" value={currentBmi.toFixed(1)} detail={currentBmi < 25 ? "Intervallo nella norma" : "Da leggere con il contesto"} icon={Activity} tone="blue" /><SummaryCard label="Obiettivo calorie" value={`${target} kcal`} detail="Deficit moderato stimato" icon={Flame} tone="orange" /><SummaryCard label="Allenamenti" value={`${profile.weeklyGoal}/sett.`} detail="Obiettivo personale" icon={Dumbbell} tone="green" /></section><section className="settings-layout"><article className="surface-card settings-card"><div className="card-head"><div><span className="card-kicker">PREFERENZE</span><h3>Esperienza</h3></div></div><SettingRow icon={Volume2} label="Guida vocale" detail="Istruzioni durante gli esercizi" control={<Switch checked={voiceEnabled} onCheckedChange={setVoiceEnabled} />} /><SettingRow icon={Watch} label="Dati Apple Watch" detail="Battito e calorie registrati" control={<span className="sync-badge"><span /> Attivo</span>} /><SettingRow icon={Sparkles} label="Adattamento automatico" detail="Serie ed esercizi seguono il feedback" control={<Switch checked={autoAdapt} onCheckedChange={setAutoAdapt} />} /></article><article className="surface-card settings-card"><div className="card-head"><div><span className="card-kicker">I TUOI DATI</span><h3>Backup, cloud e account</h3></div></div><button className="settings-action" onClick={exportData}><Download size={18} /><span><strong>Esporta backup</strong><small>Scarica profilo e progressi in JSON</small></span><ChevronRight size={17} /></button><label className="settings-action"><Upload size={18} /><span><strong>Importa backup</strong><small>Ripristina dati da un file</small></span><ChevronRight size={17} /><input type="file" accept="application/json" hidden onChange={(event) => importBackup(event, setProfile)} /></label><button className="settings-action" onClick={onCloudPush}><RefreshCw size={18} /><span><strong>Carica sul cloud</strong><small>Sincronizza via API /api/sync</small></span><ChevronRight size={17} /></button><button className="settings-action" onClick={onCloudPull}><Download size={18} /><span><strong>Scarica dal cloud</strong><small>Ripristina l’ultimo sync remoto</small></span><ChevronRight size={17} /></button><button className="settings-action danger" onClick={() => void onLogout()}><Trash2 size={18} /><span><strong>Esci dall’account</strong><small>I dati restano salvati su questo dispositivo</small></span><ChevronRight size={17} /></button></article></section></div>;
 }
 function SettingRow({ icon: Icon, label, detail, control }: { icon: LucideIcon; label: string; detail: string; control: React.ReactNode }) { return <div className="setting-row"><span><Icon size={18} /></span><div><strong>{label}</strong><small>{detail}</small></div>{control}</div>; }
 
