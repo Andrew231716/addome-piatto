@@ -1,0 +1,8 @@
+{
+  "email": "verify@test.local",
+  "updatedAt": "2026-09-23T16:21:29.265Z",
+  "data": {
+    "hello": "world",
+    "steps": 123
+  }
+}
