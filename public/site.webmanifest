@@ -1,0 +1,18 @@
+{
+  "name": "GYM & FOOD",
+  "short_name": "GYM & FOOD",
+  "description": "Allenamenti guidati, nutrizione, progressi e coaching adattivo.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f2ea",
+  "theme_color": "#ff5b17",
+  "lang": "it",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
