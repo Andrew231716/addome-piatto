@@ -204,11 +204,16 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (session: Session) =
       const session =
         mode === "login"
           ? await loginAccount({ email, password })
-          : await registerAccount({ email, name, password });
+          : await registerAccount({ email, name: name || email.split("@")[0] || "Atleta", password });
       onAuthenticated(session);
       toast.success(mode === "login" ? "Accesso effettuato" : "Account creato");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Operazione non riuscita");
+      const message = err instanceof Error ? err.message : "Operazione non riuscita";
+      setError(message);
+      if (mode === "login" && message.toLowerCase().includes("non trovato")) {
+        // Keep credentials visible and nudge toward registration on this device.
+        setMode("register");
+      }
     } finally {
       setBusy(false);
     }
