@@ -2,31 +2,30 @@
 
 App web italiana per allenamenti guidati, nutrizione, progressi e coaching.
 
-## Produzione
+## Link
 
-- URL: https://addome-piatto.vercel.app/
-- Progetto Vercel: `prj_d5YizMWCQOqmBzEnUl4afnptZ6bS`
+- App: https://addome-piatto.vercel.app/
+- Repo: https://github.com/Andrew231716/addome-piatto
+- Vercel project: `prj_d5YizMWCQOqmBzEnUl4afnptZ6bS`
+- Production branch: `main` (deploy automatico su push/PR)
 
-## Cosa include ora
+## Funzionalità
 
 - Auth reale (registrazione / login) con password PBKDF2
 - Persistenza IndexedDB per utente
-- Navigazione URL (`/allenamenti`, `/alimentazione`, …)
-- API Vercel:
+- Navigazione URL (`/allenamenti`, `/alimentazione`, `/progressi`, `/coach`, `/profilo`)
+- API:
   - `GET /api/health`
-  - `POST /api/sync` (cloud sync via GitHub Contents API quando `GITHUB_TOKEN` + `GITHUB_REPO` sono impostati)
+  - `POST /api/sync` (backup cloud su GitHub Contents API)
 
-## Script utili
+## Sviluppo locale
 
 ```bash
 npm install
 npm run build:vercel
-npm run publish:github   # richiede GITHUB_TOKEN (+ opzionale VERCEL_TOKEN)
 ```
 
-`publish:github` crea il repo GitHub, fa push su `main` e collega il progetto Vercel.
+## Env Vercel
 
-## Env Vercel per sync cloud
-
-- `GITHUB_TOKEN` — PAT con scope `repo`
-- `GITHUB_REPO` — es. `username/addome-piatto`
+- `GITHUB_TOKEN` — usato da `/api/sync`
+- `GITHUB_REPO` — `Andrew231716/addome-piatto`
