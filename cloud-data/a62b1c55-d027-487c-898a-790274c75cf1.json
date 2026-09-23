@@ -1,0 +1,128 @@
+{
+  "email": "andreapozzi408@gmail.com",
+  "updatedAt": "2026-09-23T16:59:24.057Z",
+  "data": {
+    "profile": {
+      "name": "Andrea",
+      "age": 26,
+      "height": 180,
+      "weight": 84,
+      "goalWeight": 75,
+      "weeklyGoal": 3
+    },
+    "meals": [
+      {
+        "id": "m1",
+        "slot": "Colazione",
+        "name": "Porridge proteico e frutti di bosco",
+        "calories": 380,
+        "protein": 24,
+        "carbs": 45,
+        "fat": 10,
+        "checked": true
+      },
+      {
+        "id": "m2",
+        "slot": "Spuntino",
+        "name": "Yogurt greco, mela e mandorle",
+        "calories": 210,
+        "protein": 17,
+        "carbs": 22,
+        "fat": 7,
+        "checked": true
+      },
+      {
+        "id": "m3",
+        "slot": "Pranzo",
+        "name": "Bowl mediterranea con pollo e riso",
+        "calories": 560,
+        "protein": 42,
+        "carbs": 55,
+        "fat": 14,
+        "checked": false
+      },
+      {
+        "id": "m4",
+        "slot": "Merenda",
+        "name": "Pane integrale e ricotta",
+        "calories": 190,
+        "protein": 13,
+        "carbs": 24,
+        "fat": 5,
+        "checked": false
+      },
+      {
+        "id": "m5",
+        "slot": "Cena",
+        "name": "Salmone, patate e verdure",
+        "calories": 510,
+        "protein": 38,
+        "carbs": 43,
+        "fat": 18,
+        "checked": false
+      }
+    ],
+    "shopping": [
+      {
+        "id": "s1",
+        "name": "Petto di pollo",
+        "category": "Proteine",
+        "checked": false
+      },
+      {
+        "id": "s2",
+        "name": "Yogurt greco",
+        "category": "Proteine",
+        "checked": true
+      },
+      {
+        "id": "s3",
+        "name": "Riso integrale",
+        "category": "Dispensa",
+        "checked": false
+      },
+      {
+        "id": "s4",
+        "name": "Avocado",
+        "category": "Frutta e verdura",
+        "checked": false
+      },
+      {
+        "id": "s5",
+        "name": "Pomodorini",
+        "category": "Frutta e verdura",
+        "checked": false
+      }
+    ],
+    "weightData": [
+      {
+        "date": "2 set",
+        "value": 77.8
+      },
+      {
+        "date": "6 set",
+        "value": 77.4
+      },
+      {
+        "date": "10 set",
+        "value": 77.2
+      },
+      {
+        "date": "14 set",
+        "value": 76.8
+      },
+      {
+        "date": "18 set",
+        "value": 76.5
+      },
+      {
+        "date": "23 set",
+        "value": 76.2
+      }
+    ],
+    "water": 5,
+    "steps": 6840,
+    "voiceEnabled": true,
+    "completedWorkout": false
+  }
+}
