@@ -28,6 +28,7 @@ import {
   updateAccountName,
 } from "@/lib/auth";
 import { loadUserValue, saveUserValue } from "@/lib/user-data";
+import { runNotificationChecks } from "@/lib/notifications";
 
 type TabKey = "home" | "workouts" | "nutrition" | "progress" | "coach" | "profile";
 type WorkoutStage = "Riscaldamento" | "Allenamento" | "Stretching";
@@ -36,6 +37,36 @@ type Exercise = { id: string; name: string; focus: string; seconds: number; stag
 type Meal = { id: string; slot: string; name: string; calories: number; protein: number; carbs: number; fat: number; checked: boolean };
 type ShoppingItem = { id: string; name: string; category: string; checked: boolean };
 type CoachMessage = { id: string; role: "user" | "coach"; text: string };
+type ProgressMetrics = {
+  waist: number;
+  workoutsCompleted: number;
+  streakDays: number;
+  lastWorkoutDate: string;
+  photoDataUrl: string | null;
+};
+type Recipe = { id: string; name: string; time: string; calories: number; protein: number; carbs: number; fat: number; tags: string[]; slot: string };
+
+const DAY_NAMES = ["DOMENICA", "LUNEDÌ", "MARTEDÌ", "MERCOLEDÌ", "GIOVEDÌ", "VENERDÌ", "SABATO"] as const;
+const MONTH_NAMES = ["GENNAIO", "FEBBRAIO", "MARZO", "APRILE", "MAGGIO", "GIUGNO", "LUGLIO", "AGOSTO", "SETTEMBRE", "OTTOBRE", "NOVEMBRE", "DICEMBRE"] as const;
+
+function formatTopbarDate(date = new Date()) {
+  return {
+    weekday: DAY_NAMES[date.getDay()],
+    label: `${date.getDate()} ${MONTH_NAMES[date.getMonth()]}`,
+  };
+}
+
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function macroTargets(profile: Profile) {
+  const calories = calorieTarget(profile);
+  const protein = Math.round(profile.weight * 1.8);
+  const fat = Math.round((calories * 0.28) / 9);
+  const carbs = Math.max(80, Math.round((calories - protein * 4 - fat * 9) / 4));
+  return { protein, carbs, fat };
+}
 
 const NAV: { key: TabKey; label: string; icon: LucideIcon }[] = [
   { key: "home", label: "Oggi", icon: Home },
@@ -153,11 +184,18 @@ const DEFAULT_SHOPPING: ShoppingItem[] = [
   { id: "s4", name: "Avocado", category: "Frutta e verdura", checked: false },
   { id: "s5", name: "Pomodorini", category: "Frutta e verdura", checked: false },
 ];
-const RECIPES = [
-  { id: "r1", name: "Bowl mediterranea proteica", time: "22 min", calories: 540, protein: 41, tags: ["Alta in proteine", "Pranzo"] },
-  { id: "r2", name: "Piadina integrale con tacchino", time: "12 min", calories: 430, protein: 35, tags: ["Veloce", "Cena"] },
-  { id: "r3", name: "Porridge cacao e banana", time: "8 min", calories: 390, protein: 26, tags: ["Colazione", "Vegetariana"] },
+const RECIPES: Recipe[] = [
+  { id: "r1", name: "Bowl mediterranea proteica", time: "22 min", calories: 540, protein: 41, carbs: 52, fat: 16, tags: ["Alta in proteine", "Pranzo"], slot: "Pranzo" },
+  { id: "r2", name: "Piadina integrale con tacchino", time: "12 min", calories: 430, protein: 35, carbs: 38, fat: 14, tags: ["Veloce", "Cena"], slot: "Cena" },
+  { id: "r3", name: "Porridge cacao e banana", time: "8 min", calories: 390, protein: 26, carbs: 48, fat: 10, tags: ["Colazione", "Vegetariana"], slot: "Colazione" },
 ];
+const DEFAULT_METRICS: ProgressMetrics = {
+  waist: 84,
+  workoutsCompleted: 15,
+  streakDays: 12,
+  lastWorkoutDate: "",
+  photoDataUrl: null,
+};
 const WEIGHT_SEED = [{ date: "2 set", value: 77.8 }, { date: "6 set", value: 77.4 }, { date: "10 set", value: 77.2 }, { date: "14 set", value: 76.8 }, { date: "18 set", value: 76.5 }, { date: "23 set", value: 76.2 }];
 const HEART_SEED = [{ label: "Lun", rest: 64, workout: 128 }, { label: "Mar", rest: 63, workout: 134 }, { label: "Mer", rest: 62, workout: 131 }, { label: "Gio", rest: 62, workout: 139 }, { label: "Ven", rest: 61, workout: 136 }, { label: "Sab", rest: 61, workout: 142 }, { label: "Oggi", rest: 60, workout: 137 }];
 
@@ -324,10 +362,19 @@ function AuthenticatedApp({ session, onSessionChange }: { session: Session; onSe
   const [steps, setSteps] = useUserState(session.accountId, "addome-steps", 6840);
   const [voiceEnabled, setVoiceEnabled] = useUserState(session.accountId, "addome-voice", true);
   const [todayActivity, setTodayActivity] = useUserState<string>(session.accountId, "addome-today-activity", "Core · 24 min");
+  const [metrics, setMetrics] = useUserState<ProgressMetrics>(session.accountId, "addome-metrics", DEFAULT_METRICS);
   const [workoutOpen, setWorkoutOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [clock, setClock] = useState(() => new Date());
   const consumed = meals.filter((meal) => meal.checked).reduce((sum, meal) => sum + meal.calories, 0);
   const target = calorieTarget(profile);
+  const topbarDate = formatTopbarDate(clock);
+  const macros = macroTargets(profile);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClock(new Date()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (profile.name !== session.name) {
@@ -343,8 +390,26 @@ function AuthenticatedApp({ session, onSessionChange }: { session: Session; onSe
     setWeightData([...weightData.slice(0, -1), { ...last, value: profile.weight }]);
   }, [profile.weight, weightData, setWeightData]);
 
+  const markWorkoutComplete = () => {
+    const today = todayIso();
+    if (metrics.lastWorkoutDate === today) {
+      setCompletedWorkout(true);
+      return;
+    }
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayIso = yesterday.toISOString().slice(0, 10);
+    setMetrics({
+      ...metrics,
+      workoutsCompleted: metrics.workoutsCompleted + 1,
+      streakDays: metrics.lastWorkoutDate === yesterdayIso ? metrics.streakDays + 1 : 1,
+      lastWorkoutDate: today,
+    });
+    setCompletedWorkout(true);
+  };
+
   const syncCloud = async (action: "pull" | "push") => {
-    const snapshot = { profile, meals, shopping, weightData, water, steps, voiceEnabled, completedWorkout };
+    const snapshot = { profile, meals, shopping, weightData, water, steps, voiceEnabled, completedWorkout, metrics, todayActivity };
     try {
       const response = await fetch("/api/sync", {
         method: "POST",
@@ -367,6 +432,8 @@ function AuthenticatedApp({ session, onSessionChange }: { session: Session; onSe
         setSteps(result.payload.steps);
         setVoiceEnabled(result.payload.voiceEnabled);
         setCompletedWorkout(result.payload.completedWorkout);
+        if (result.payload.metrics) setMetrics(result.payload.metrics);
+        if (result.payload.todayActivity) setTodayActivity(result.payload.todayActivity);
         toast.success("Dati scaricati dal cloud");
       } else if (action === "push") {
         toast.success("Dati sincronizzati sul cloud");
@@ -379,11 +446,11 @@ function AuthenticatedApp({ session, onSessionChange }: { session: Session; onSe
   };
 
   const renderView = () => {
-    if (tab === "home") return <Dashboard profile={profile} steps={steps} setSteps={setSteps} water={water} setWater={setWater} consumed={consumed} target={target} workoutDone={completedWorkout} startWorkout={() => setWorkoutOpen(true)} goTo={setTab} todayActivity={todayActivity} />;
+    if (tab === "home") return <Dashboard profile={profile} steps={steps} setSteps={setSteps} water={water} setWater={setWater} consumed={consumed} target={target} workoutDone={completedWorkout} startWorkout={() => setWorkoutOpen(true)} goTo={setTab} todayActivity={todayActivity} streakDays={metrics.streakDays} />;
     if (tab === "workouts") return <Workouts startWorkout={() => setWorkoutOpen(true)} workoutDone={completedWorkout} todayActivity={todayActivity} />;
-    if (tab === "nutrition") return <Nutrition userId={session.accountId} meals={meals} setMeals={setMeals} shopping={shopping} setShopping={setShopping} target={target} />;
-    if (tab === "progress") return <ProgressAndHealth profile={profile} setProfile={setProfile} weightData={weightData} setWeightData={setWeightData} />;
-    if (tab === "coach") return <Coach userId={session.accountId} profile={profile} voiceEnabled={voiceEnabled} setVoiceEnabled={setVoiceEnabled} todayActivity={todayActivity} setTodayActivity={setTodayActivity} />;
+    if (tab === "nutrition") return <Nutrition userId={session.accountId} meals={meals} setMeals={setMeals} shopping={shopping} setShopping={setShopping} target={target} macros={macros} />;
+    if (tab === "progress") return <ProgressAndHealth profile={profile} setProfile={setProfile} weightData={weightData} setWeightData={setWeightData} metrics={metrics} setMetrics={setMetrics} />;
+    if (tab === "coach") return <Coach userId={session.accountId} profile={profile} voiceEnabled={voiceEnabled} setVoiceEnabled={setVoiceEnabled} todayActivity={todayActivity} setTodayActivity={setTodayActivity} consumed={consumed} target={target} steps={steps} water={water} />;
     return (
       <ProfileView
         userId={session.accountId}
@@ -393,8 +460,12 @@ function AuthenticatedApp({ session, onSessionChange }: { session: Session; onSe
         voiceEnabled={voiceEnabled}
         setVoiceEnabled={setVoiceEnabled}
         openEditor={() => setProfileOpen(true)}
-        exportData={() => exportAllData({ profile, meals, shopping, weightData, water, steps })}
+        exportData={() => exportAllData({ profile, meals, shopping, weightData, water, steps, metrics, todayActivity })}
         email={session.email}
+        metrics={metrics}
+        workoutDone={completedWorkout}
+        mealsLogged={meals.filter((meal) => meal.checked).length}
+        mealsTotal={meals.length}
         onLogout={async () => {
           await logoutAccount();
           onSessionChange(null);
@@ -412,9 +483,9 @@ function AuthenticatedApp({ session, onSessionChange }: { session: Session; onSe
         <div className="rail-card"><span className="rail-card-icon"><Sparkles size={17} /></span><strong>Settimana 4</strong><p>La base è solida. Questa settimana consolidiamo tecnica e ritmo.</p><div className="mini-progress"><span style={{ width: "33%" }} /></div><small>4 di 12</small></div>
         <button className="rail-profile" onClick={() => setProfileOpen(true)}><span className="avatar">{initials(profile.name)}</span><span><strong>{profile.name}</strong><small>{session.email}</small></span><Settings2 size={17} /></button>
       </aside>
-      <div className="app-body"><header className="topbar"><div className="topbar-date"><span>MERCOLEDÌ</span><strong>23 SETTEMBRE</strong></div><div className="top-actions"><div className="device-pill"><Watch size={17} /><span>Watch</span><i /></div><button className="icon-button" aria-label="Cerca" onClick={() => toast("La ricerca globale sarà disponibile nel prossimo aggiornamento")}><Search size={19} /></button><button className="profile-chip" onClick={() => setProfileOpen(true)}><span>{initials(profile.name)}</span></button></div></header><main className="main-surface">{renderView()}</main></div>
+      <div className="app-body"><header className="topbar"><div className="topbar-date"><span>{topbarDate.weekday}</span><strong>{topbarDate.label}</strong></div><div className="top-actions"><div className="device-pill demo" title="Demo UI · non collegato"><Watch size={17} /><span>Watch</span><em>demo</em></div><button className="icon-button" aria-label="Cerca" onClick={() => toast("La ricerca globale sarà disponibile nel prossimo aggiornamento")}><Search size={19} /></button><button className="profile-chip" onClick={() => setProfileOpen(true)}><span>{initials(profile.name)}</span></button></div></header><main className="main-surface">{renderView()}</main></div>
       <nav className="mobile-nav" aria-label="Navigazione mobile">{NAV.map(({ key, label, icon: Icon }) => <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}><Icon size={20} /><span>{label === "Alimentazione" ? "Cibo" : label}</span></button>)}</nav>
-      <GuidedWorkout open={workoutOpen} onOpenChange={setWorkoutOpen} voiceEnabled={voiceEnabled} onComplete={() => { setCompletedWorkout(true); setWorkoutOpen(false); toast.success("Allenamento completato: 186 kcal stimate"); }} />
+      <GuidedWorkout open={workoutOpen} onOpenChange={setWorkoutOpen} voiceEnabled={voiceEnabled} onComplete={() => { markWorkoutComplete(); setWorkoutOpen(false); toast.success("Allenamento completato: 186 kcal stimate"); }} />
       <ProfileEditor open={profileOpen} onOpenChange={setProfileOpen} profile={profile} setProfile={setProfile} weightData={weightData} setWeightData={setWeightData} />
       <Toaster position="top-center" richColors />
     </div>
@@ -425,13 +496,13 @@ function PageHeading({ eyebrow, title, description, action }: { eyebrow: string;
   return <div className="page-heading"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1>{description && <p>{description}</p>}</div>{action}</div>;
 }
 
-function Dashboard({ profile, steps, setSteps, water, setWater, consumed, target, workoutDone, startWorkout, goTo, todayActivity }: { profile: Profile; steps: number; setSteps: (value: number) => void; water: number; setWater: (value: number) => void; consumed: number; target: number; workoutDone: boolean; startWorkout: () => void; goTo: (tab: TabKey) => void; todayActivity: string }) {
+function Dashboard({ profile, steps, setSteps, water, setWater, consumed, target, workoutDone, startWorkout, goTo, todayActivity, streakDays }: { profile: Profile; steps: number; setSteps: (value: number) => void; water: number; setWater: (value: number) => void; consumed: number; target: number; workoutDone: boolean; startWorkout: () => void; goTo: (tab: TabKey) => void; todayActivity: string; streakDays: number }) {
   const dailyProgress = Math.min(100, Math.round(((Number(workoutDone) + Math.min(water / 8, 1) + Math.min(steps / 9000, 1)) / 3) * 100));
   const isReplaced = !todayActivity.toLowerCase().includes("core");
   return <div className="page-stack">
-    <PageHeading eyebrow="OGGI · GYM & FOOD" title={`Ciao ${profile.name}, continuiamo così.`} description="Il piano di oggi è calibrato sul recupero e sull’obiettivo settimanale." action={<div className="streak"><Flame size={18} /><strong>12</strong><span>giorni</span></div>} />
+    <PageHeading eyebrow="OGGI · GYM & FOOD" title={`Ciao ${profile.name}, continuiamo così.`} description="Il piano di oggi è calibrato sul recupero e sull’obiettivo settimanale." action={<div className="streak"><Flame size={18} /><strong>{streakDays}</strong><span>giorni</span></div>} />
     <section className="dashboard-hero"><div className="hero-copy"><span className="status-badge"><span /> GYM PLAN · OGGI</span><h2>Allenati. Nutriti. Migliora.</h2><p>{isReplaced ? `Oggi il piano prevede: ${todayActivity}. Puoi comunque aprire la sessione guidata quando vuoi.` : "Core e stabilità con riscaldamento mirato, stretching specifico e nutrizione coordinata al tuo obiettivo."}</p><div className="hero-meta"><span><Clock3 size={16} /> {isReplaced ? "Attività sostituita" : "24 min"}</span><span><Flame size={16} /> 186 kcal</span><span><Utensils size={16} /> Piano cibo attivo</span></div><button className="primary-button inverse" onClick={startWorkout}>{workoutDone ? <><RotateCcw size={18} /> Ripeti allenamento</> : <><Play size={18} fill="currentColor" /> Inizia ora</>}</button></div><div className="hero-score"><div className="score-ring" style={{ "--score": `${dailyProgress * 3.6}deg` } as React.CSSProperties}><span><strong>{dailyProgress}</strong><small>%</small></span></div><p>Equilibrio di oggi</p></div></section>
-    <section className="metric-grid"><MetricCard icon={Footprints} label="Passi" value={steps.toLocaleString("it-IT")} sub="Obiettivo 9.000" progress={(steps / 9000) * 100} tone="blue" action={() => setSteps(Math.min(20000, steps + 500))} /><MetricCard icon={Utensils} label="Calorie" value={`${consumed}`} unit={`/${target} kcal`} sub={`${Math.max(target - consumed, 0)} kcal disponibili`} progress={(consumed / target) * 100} tone="orange" action={() => goTo("nutrition")} /><MetricCard icon={HeartPulse} label="Battito" value="60" unit="bpm" sub="A riposo · da Watch" progress={71} tone="red" action={() => goTo("progress")} /><MetricCard icon={Activity} label="Acqua" value={`${water}`} unit="/8 bicchieri" sub="Idratazione di oggi" progress={(water / 8) * 100} tone="teal" action={() => setWater(Math.min(8, water + 1))} /></section>
+    <section className="metric-grid"><MetricCard icon={Footprints} label="Passi" value={steps.toLocaleString("it-IT")} sub="Obiettivo 9.000" progress={(steps / 9000) * 100} tone="blue" action={() => setSteps(Math.min(20000, steps + 500))} /><MetricCard icon={Utensils} label="Calorie" value={`${consumed}`} unit={`/${target} kcal`} sub={`${Math.max(target - consumed, 0)} kcal disponibili`} progress={(consumed / target) * 100} tone="orange" action={() => goTo("nutrition")} /><MetricCard icon={HeartPulse} label="Battito" value="—" unit="bpm" sub="Watch non collegato" progress={0} tone="red" action={() => goTo("progress")} /><MetricCard icon={Activity} label="Acqua" value={`${water}`} unit="/8 bicchieri" sub="Idratazione di oggi" progress={(water / 8) * 100} tone="teal" action={() => setWater(Math.min(8, water + 1))} /></section>
     <section className="two-column"><article className="surface-card schedule-card"><div className="card-head"><div><span className="card-kicker">IL TUO PERCORSO</span><h3>Settimana 4 di 12</h3></div><button className="text-button" onClick={() => goTo("workouts")}>Programma <ChevronRight size={16} /></button></div><WeekTrack /><div className="week-callout"><Target size={21} /><div><strong>Focus della settimana</strong><p>Controllo del core e qualità del movimento. Aumenta solo se la tecnica resta pulita.</p></div></div></article><article className="surface-card daily-plan"><div className="card-head"><div><span className="card-kicker">CHECK-IN</span><h3>Il tuo ritmo oggi</h3></div><span className="soft-badge">3 obiettivi</span></div><CheckRow done={workoutDone || isReplaced} label={isReplaced ? todayActivity : "Allenamento core"} detail={isReplaced ? "Sostituito" : "24 min"} onClick={startWorkout} /><CheckRow done={water >= 8} label="8 bicchieri d’acqua" detail={`${water}/8`} onClick={() => setWater(Math.min(8, water + 1))} /><CheckRow done={steps >= 9000} label="9.000 passi" detail={steps.toLocaleString("it-IT")} onClick={() => setSteps(Math.min(20000, steps + 500))} /></article></section>
   </div>;
 }
@@ -452,18 +523,22 @@ function Workouts({ startWorkout, workoutDone, todayActivity }: { startWorkout: 
 function PhaseHeader({ number, title, subtitle, color }: { number: string; title: string; subtitle: string; color: string }) { return <div className={`phase-header ${color}`}><span>{number}</span><div><strong>{title}</strong><small>{subtitle}</small></div></div>; }
 function ExerciseRow({ exercise, compact = false }: { exercise: Exercise; compact?: boolean }) { return <div className="exercise-row"><span className="exercise-play"><Play size={14} fill="currentColor" /></span><div><strong>{exercise.name}{exercise.side ? ` · ${exercise.side}` : ""}</strong><small>{exercise.focus}</small></div>{exercise.set && <span className="set-badge">Serie {exercise.set}</span>}<span className="duration"><Clock3 size={14} /> {exercise.seconds}s</span>{!compact && <a href={`https://www.youtube.com/watch?v=${exercise.videoId}`} target="_blank" rel="noreferrer" aria-label={`Apri il video di ${exercise.name}`}><Video size={17} /></a>}</div>; }
 
-function Nutrition({ userId, meals, setMeals, shopping, setShopping, target }: { userId: string; meals: Meal[]; setMeals: (meals: Meal[]) => void; shopping: ShoppingItem[]; setShopping: (items: ShoppingItem[]) => void; target: number }) {
+function Nutrition({ userId, meals, setMeals, shopping, setShopping, target, macros }: { userId: string; meals: Meal[]; setMeals: (meals: Meal[]) => void; shopping: ShoppingItem[]; setShopping: (items: ShoppingItem[]) => void; target: number; macros: { protein: number; carbs: number; fat: number } }) {
   const [addMealOpen, setAddMealOpen] = useState(false);
   const [captureOpen, setCaptureOpen] = useState<"photo" | "barcode" | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [barcodeValue, setBarcodeValue] = useState("");
-  const [newMeal, setNewMeal] = useState({ slot: "Pranzo", name: "", calories: "", protein: "" });
+  const [newMeal, setNewMeal] = useState({ slot: "Pranzo", name: "", calories: "", protein: "", carbs: "", fat: "" });
   const [newShopping, setNewShopping] = useState("");
   const [favorites, setFavorites] = useUserState<string[]>(userId, "addome-favorites", ["r1"]);
   const photoRef = useRef<HTMLInputElement>(null);
   const barcodeRef = useRef<HTMLInputElement>(null);
   const totals = meals.filter((meal) => meal.checked).reduce((sum, meal) => ({ calories: sum.calories + meal.calories, protein: sum.protein + meal.protein, carbs: sum.carbs + meal.carbs, fat: sum.fat + meal.fat }), { calories: 0, protein: 0, carbs: 0, fat: 0 });
-  const addMeal = () => { if (!newMeal.name || !newMeal.calories) return; setMeals([...meals, { id: crypto.randomUUID(), slot: newMeal.slot, name: newMeal.name, calories: Number(newMeal.calories), protein: Number(newMeal.protein || 0), carbs: 0, fat: 0, checked: true }]); setNewMeal({ slot: "Pranzo", name: "", calories: "", protein: "" }); setAddMealOpen(false); toast.success("Alimento aggiunto al diario"); };
+  const addRecipeToDiary = (recipe: Recipe) => {
+    setMeals([...meals, { id: crypto.randomUUID(), slot: recipe.slot, name: recipe.name, calories: recipe.calories, protein: recipe.protein, carbs: recipe.carbs, fat: recipe.fat, checked: true }]);
+    toast.success(`${recipe.name} aggiunta al diario`);
+  };
+  const addMeal = () => { if (!newMeal.name || !newMeal.calories) return; setMeals([...meals, { id: crypto.randomUUID(), slot: newMeal.slot, name: newMeal.name, calories: Number(newMeal.calories), protein: Number(newMeal.protein || 0), carbs: Number(newMeal.carbs || 0), fat: Number(newMeal.fat || 0), checked: true }]); setNewMeal({ slot: "Pranzo", name: "", calories: "", protein: "", carbs: "", fat: "" }); setAddMealOpen(false); toast.success("Alimento aggiunto al diario"); };
   const openCapture = (mode: "photo" | "barcode") => {
     setPreview(null);
     setBarcodeValue("");
@@ -489,30 +564,36 @@ function Nutrition({ userId, meals, setMeals, shopping, setShopping, target }: {
     toast.success("Codice acquisito: alimento aggiunto");
   };
   return <div className="page-stack nutrition-page"><PageHeading eyebrow="ALIMENTAZIONE" title="Mangia bene, senza complicarti la vita" description="Diario, ricette e spesa lavorano insieme sul tuo obiettivo calorico." action={<button className="primary-button" onClick={() => setAddMealOpen(true)}><Plus size={18} /> Aggiungi alimento</button>} />
-    <section className="nutrition-hero"><img src="/mediterranean-bowl.jpg" alt="Bowl mediterranea bilanciata con pollo, verdure, avocado, riso e ceci" /><div className="nutrition-overlay"><span className="status-badge light"><Sparkles size={13} /> SCELTA DEL GIORNO</span><h2>Bowl mediterranea proteica</h2><p>Un pasto completo che copre proteine, fibre e carboidrati complessi.</p><button onClick={() => toast.success("Ricetta salvata nel piano di oggi")}>Usa nel piano <ArrowRight size={17} /></button></div></section>
+    <section className="nutrition-hero"><img src="/mediterranean-bowl.jpg" alt="Bowl mediterranea bilanciata con pollo, verdure, avocado, riso e ceci" /><div className="nutrition-overlay"><span className="status-badge light"><Sparkles size={13} /> SCELTA DEL GIORNO</span><h2>Bowl mediterranea proteica</h2><p>Un pasto completo che copre proteine, fibre e carboidrati complessi.</p><button onClick={() => addRecipeToDiary(RECIPES[0])}>Usa nel piano <ArrowRight size={17} /></button></div></section>
     <Tabs defaultValue="today" className="nutrition-tabs"><TabsList className="premium-tabs"><TabsTrigger value="today">Diario</TabsTrigger><TabsTrigger value="recipes">Ricette</TabsTrigger><TabsTrigger value="shopping">Spesa</TabsTrigger></TabsList>
-      <TabsContent value="today" className="tab-panel"><section className="macro-layout"><article className="surface-card calories-card"><div className="calorie-ring" style={{ "--score": `${Math.min(totals.calories / target, 1) * 360}deg` } as React.CSSProperties}><span><small>consumate</small><strong>{totals.calories}</strong><em>di {target} kcal</em></span></div><div className="macro-bars"><MacroLine label="Proteine" value={totals.protein} target={135} color="var(--orange)" /><MacroLine label="Carboidrati" value={totals.carbs} target={210} color="#4069d7" /><MacroLine label="Grassi" value={totals.fat} target={65} color="#1b9c75" /></div></article><article className="surface-card smart-add"><span className="card-kicker">AGGIUNTA RAPIDA</span><h3>Registra quello che mangi</h3><div className="quick-actions"><button type="button" onClick={() => openCapture("photo")}><Camera size={20} /><span><strong>Fotografa il piatto</strong><small>Apre la fotocamera</small></span></button><button type="button" onClick={() => openCapture("barcode")}><Square size={20} /><span><strong>Codice a barre</strong><small>Apre la fotocamera</small></span></button></div></article></section>
+      <TabsContent value="today" className="tab-panel"><section className="macro-layout"><article className="surface-card calories-card"><div className="calorie-ring" style={{ "--score": `${Math.min(totals.calories / target, 1) * 360}deg` } as React.CSSProperties}><span><small>consumate</small><strong>{totals.calories}</strong><em>di {target} kcal</em></span></div><div className="macro-bars"><MacroLine label="Proteine" value={totals.protein} target={macros.protein} color="var(--orange)" /><MacroLine label="Carboidrati" value={totals.carbs} target={macros.carbs} color="#4069d7" /><MacroLine label="Grassi" value={totals.fat} target={macros.fat} color="#1b9c75" /></div></article><article className="surface-card smart-add"><span className="card-kicker">AGGIUNTA RAPIDA</span><h3>Registra quello che mangi</h3><div className="quick-actions"><button type="button" onClick={() => openCapture("photo")}><Camera size={20} /><span><strong>Fotografa il piatto</strong><small>Apre la fotocamera</small></span></button><button type="button" onClick={() => openCapture("barcode")}><Square size={20} /><span><strong>Codice a barre</strong><small>Apre la fotocamera</small></span></button></div></article></section>
       <section className="surface-card meal-card"><div className="card-head"><div><span className="card-kicker">PIANO GIORNALIERO</span><h3>I tuoi pasti</h3></div><span className="soft-badge">{meals.filter((m) => m.checked).length}/{meals.length} registrati</span></div><div className="meal-list">{meals.map((meal) => <button key={meal.id} className={meal.checked ? "meal-row eaten" : "meal-row"} onClick={() => setMeals(meals.map((item) => item.id === meal.id ? { ...item, checked: !item.checked } : item))}><span className="meal-time">{meal.slot}</span><span className="meal-check">{meal.checked && <Check size={14} />}</span><span className="meal-name"><strong>{meal.name}</strong><small>P {meal.protein}g · C {meal.carbs}g · G {meal.fat}g</small></span><strong className="meal-kcal">{meal.calories}<small> kcal</small></strong></button>)}</div></section></TabsContent>
-      <TabsContent value="recipes" className="tab-panel"><section className="recipe-grid">{RECIPES.map((recipe, index) => <article className="recipe-card" key={recipe.id}><div className={`recipe-visual recipe-${index + 1}`}><Utensils size={27} /><button onClick={() => setFavorites(favorites.includes(recipe.id) ? favorites.filter((id) => id !== recipe.id) : [...favorites, recipe.id])}><Star size={18} fill={favorites.includes(recipe.id) ? "currentColor" : "none"} /></button></div><div className="recipe-copy"><div className="recipe-tags">{recipe.tags.map((tag) => <span key={tag}>{tag}</span>)}</div><h3>{recipe.name}</h3><p><Clock3 size={15} /> {recipe.time}<span />{recipe.calories} kcal<span />{recipe.protein}g proteine</p><button onClick={() => toast.success("Ricetta aggiunta al piano")}>Apri ricetta <ChevronRight size={16} /></button></div></article>)}</section></TabsContent>
+      <TabsContent value="recipes" className="tab-panel"><section className="recipe-grid">{RECIPES.map((recipe, index) => <article className="recipe-card" key={recipe.id}><div className={`recipe-visual recipe-${index + 1}`}><Utensils size={27} /><button onClick={() => setFavorites(favorites.includes(recipe.id) ? favorites.filter((id) => id !== recipe.id) : [...favorites, recipe.id])}><Star size={18} fill={favorites.includes(recipe.id) ? "currentColor" : "none"} /></button></div><div className="recipe-copy"><div className="recipe-tags">{recipe.tags.map((tag) => <span key={tag}>{tag}</span>)}</div><h3>{recipe.name}</h3><p><Clock3 size={15} /> {recipe.time}<span />{recipe.calories} kcal<span />{recipe.protein}g proteine</p><button onClick={() => addRecipeToDiary(recipe)}>Aggiungi al diario <ChevronRight size={16} /></button></div></article>)}</section></TabsContent>
       <TabsContent value="shopping" className="tab-panel"><section className="surface-card shopping-card"><div className="card-head"><div><span className="card-kicker">SPESA INTELLIGENTE</span><h3>Generata dal piano settimanale</h3></div><span className="soft-badge">{shopping.filter((item) => item.checked).length}/{shopping.length}</span></div><div className="shopping-input"><Input value={newShopping} onChange={(event) => setNewShopping(event.target.value)} placeholder="Aggiungi un prodotto" onKeyDown={(event) => { if (event.key === "Enter" && newShopping.trim()) { setShopping([...shopping, { id: crypto.randomUUID(), name: newShopping.trim(), category: "Altro", checked: false }]); setNewShopping(""); } }} /><button className="primary-button compact" onClick={() => { if (newShopping.trim()) { setShopping([...shopping, { id: crypto.randomUUID(), name: newShopping.trim(), category: "Altro", checked: false }]); setNewShopping(""); } }}><Plus size={17} /> Aggiungi</button></div><div className="shopping-list">{shopping.map((item) => <div className={item.checked ? "shopping-row checked" : "shopping-row"} key={item.id}><button className="check-circle" onClick={() => setShopping(shopping.map((entry) => entry.id === item.id ? { ...entry, checked: !entry.checked } : entry))}>{item.checked && <Check size={14} />}</button><span><strong>{item.name}</strong><small>{item.category}</small></span><button aria-label={`Elimina ${item.name}`} onClick={() => setShopping(shopping.filter((entry) => entry.id !== item.id))}><Trash2 size={17} /></button></div>)}</div></section></TabsContent>
     </Tabs>
     <input ref={photoRef} type="file" accept="image/*" capture="environment" hidden onChange={(event) => { const file = event.target.files?.[0]; if (file) estimateFromPhoto(file); event.target.value = ""; }} />
     <input ref={barcodeRef} type="file" accept="image/*" capture="environment" hidden onChange={(event) => { const file = event.target.files?.[0]; if (file) { setPreview(URL.createObjectURL(file)); setCaptureOpen("barcode"); } event.target.value = ""; }} />
-    <Dialog open={addMealOpen} onOpenChange={setAddMealOpen}><DialogContent className="app-dialog"><DialogHeader><DialogTitle>Aggiungi un alimento</DialogTitle><DialogDescription>Inserisci una stima semplice. Potrai correggerla in qualsiasi momento.</DialogDescription></DialogHeader><div className="form-stack"><label>Momento del giorno<div className="segment-control">{["Colazione", "Pranzo", "Cena", "Spuntino"].map((slot) => <button key={slot} className={newMeal.slot === slot ? "active" : ""} onClick={() => setNewMeal({ ...newMeal, slot })}>{slot}</button>)}</div></label><label>Alimento<Input value={newMeal.name} onChange={(event) => setNewMeal({ ...newMeal, name: event.target.value })} placeholder="es. Pasta integrale al pomodoro" /></label><div className="form-grid"><label>Calorie<Input type="number" value={newMeal.calories} onChange={(event) => setNewMeal({ ...newMeal, calories: event.target.value })} /></label><label>Proteine (g)<Input type="number" value={newMeal.protein} onChange={(event) => setNewMeal({ ...newMeal, protein: event.target.value })} /></label></div><button className="primary-button full" onClick={addMeal}>Aggiungi al diario</button></div></DialogContent></Dialog>
+    <Dialog open={addMealOpen} onOpenChange={setAddMealOpen}><DialogContent className="app-dialog"><DialogHeader><DialogTitle>Aggiungi un alimento</DialogTitle><DialogDescription>Inserisci una stima semplice. Potrai correggerla in qualsiasi momento.</DialogDescription></DialogHeader><div className="form-stack"><label>Momento del giorno<div className="segment-control">{["Colazione", "Pranzo", "Cena", "Spuntino"].map((slot) => <button key={slot} className={newMeal.slot === slot ? "active" : ""} onClick={() => setNewMeal({ ...newMeal, slot })}>{slot}</button>)}</div></label><label>Alimento<Input value={newMeal.name} onChange={(event) => setNewMeal({ ...newMeal, name: event.target.value })} placeholder="es. Pasta integrale al pomodoro" /></label><div className="form-grid"><label>Calorie<Input type="number" value={newMeal.calories} onChange={(event) => setNewMeal({ ...newMeal, calories: event.target.value })} /></label><label>Proteine (g)<Input type="number" value={newMeal.protein} onChange={(event) => setNewMeal({ ...newMeal, protein: event.target.value })} /></label><label>Carboidrati (g)<Input type="number" value={newMeal.carbs} onChange={(event) => setNewMeal({ ...newMeal, carbs: event.target.value })} /></label><label>Grassi (g)<Input type="number" value={newMeal.fat} onChange={(event) => setNewMeal({ ...newMeal, fat: event.target.value })} /></label></div><button className="primary-button full" onClick={addMeal}>Aggiungi al diario</button></div></DialogContent></Dialog>
     <Dialog open={captureOpen === "barcode"} onOpenChange={(open) => !open && setCaptureOpen(null)}><DialogContent className="app-dialog"><DialogHeader><DialogTitle>Codice a barre</DialogTitle><DialogDescription>Scatta o carica una foto del codice, poi conferma il numero prodotto.</DialogDescription></DialogHeader><div className="form-stack">{preview && <img src={preview} alt="Anteprima codice" className="capture-preview" />}<label>Codice prodotto<Input value={barcodeValue} onChange={(event) => setBarcodeValue(event.target.value)} placeholder="es. 8001234567890" /></label><button className="secondary-button full" onClick={() => barcodeRef.current?.click()}><Camera size={17} /> Riapri fotocamera</button><button className="primary-button full" onClick={() => estimateFromBarcode()}>Aggiungi alimento</button></div></DialogContent></Dialog>
   </div>;
 }
 function MacroLine({ label, value, target, color }: { label: string; value: number; target: number; color: string }) { return <div className="macro-line"><div><span>{label}</span><strong>{value}<small>/{target}g</small></strong></div><div><span style={{ width: `${Math.min((value / target) * 100, 100)}%`, background: color }} /></div></div>; }
 
-function ProgressAndHealth({ profile, setProfile, weightData, setWeightData }: { profile: Profile; setProfile: (profile: Profile) => void; weightData: { date: string; value: number }[]; setWeightData: (data: { date: string; value: number }[]) => void }) {
+function ProgressAndHealth({ profile, setProfile, weightData, setWeightData, metrics, setMetrics }: { profile: Profile; setProfile: (profile: Profile) => void; weightData: { date: string; value: number }[]; setWeightData: (data: { date: string; value: number }[]) => void; metrics: ProgressMetrics; setMetrics: (metrics: ProgressMetrics) => void }) {
   const [view, setView] = useState("progress");
   const [weight, setWeight] = useState("");
-  const [photo, setPhoto] = useState<string | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
+  const [waistDraft, setWaistDraft] = useState(String(metrics.waist));
+  const [workoutsDraft, setWorkoutsDraft] = useState(String(metrics.workoutsCompleted));
+  const [streakDraft, setStreakDraft] = useState(String(metrics.streakDays));
+  const [reviewOpen, setReviewOpen] = useState(false);
   const currentWeight = weightData.at(-1)?.value ?? profile.weight;
   const startWeight = weightData[0]?.value ?? profile.weight;
   const lost = startWeight - currentWeight;
   const chartMin = Math.floor(Math.min(...weightData.map((point) => point.value), currentWeight) - 1);
   const chartMax = Math.ceil(Math.max(...weightData.map((point) => point.value), currentWeight) + 1);
+  const completionPct = Math.min(100, Math.round((metrics.workoutsCompleted / Math.max(profile.weeklyGoal * 4, 1)) * 100));
+  const reviewScore = Math.min(10, Math.max(6, Number((7 + Math.min(lost, 3) * 0.4 + Math.min(metrics.streakDays, 14) * 0.08).toFixed(1))));
   const saveWeight = () => {
     if (!weight) return;
     const nextValue = Number(weight);
@@ -521,19 +602,37 @@ function ProgressAndHealth({ profile, setProfile, weightData, setWeightData }: {
     setWeight("");
     toast.success("Peso aggiornato in Progressi e Profilo");
   };
+  const savePhoto = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      setMetrics({ ...metrics, photoDataUrl: String(reader.result) });
+      toast.success("Foto progresso salvata");
+    };
+    reader.readAsDataURL(file);
+  };
   return <div className="page-stack"><PageHeading eyebrow="RISULTATI & SALUTE" title="I numeri che contano davvero" description="Peso, misure, frequenza cardiaca e recupero letti nello stesso contesto." action={<div className="segment-control heading-segment"><button className={view === "progress" ? "active" : ""} onClick={() => setView("progress")}>Progressi</button><button className={view === "health" ? "active" : ""} onClick={() => setView("health")}>Salute</button></div>} />
-    {view === "progress" ? <><section className="summary-grid"><SummaryCard label="Peso attuale" value={`${currentWeight.toFixed(1)} kg`} detail={`${lost >= 0 ? "−" : "+"}${Math.abs(lost).toFixed(1)} kg dall’inizio`} icon={TrendingDown} tone="orange" /><SummaryCard label="Girovita" value="84 cm" detail="−4 cm in 4 settimane" icon={Target} tone="blue" /><SummaryCard label="Allenamenti" value="15" detail="88% completati" icon={Dumbbell} tone="green" /><SummaryCard label="Costanza" value="12 giorni" detail="Record personale" icon={Flame} tone="orange" /></section><section className="two-column chart-layout"><article className="surface-card chart-card"><div className="card-head"><div><span className="card-kicker">ANDAMENTO</span><h3>Peso corporeo</h3></div><div className="inline-add"><Input type="number" step="0.1" value={weight} onChange={(event) => setWeight(event.target.value)} placeholder="kg" /><button onClick={saveWeight}><Plus size={17} /></button></div></div><p className="chart-sync-note">Allineato al profilo: {profile.weight.toFixed(1)} kg</p><div className="chart-wrap"><ResponsiveContainer width="100%" height="100%"><AreaChart data={weightData}><defs><linearGradient id="weightFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#ff5b17" stopOpacity={0.25} /><stop offset="100%" stopColor="#ff5b17" stopOpacity={0} /></linearGradient></defs><CartesianGrid vertical={false} stroke="#ece5dc" /><XAxis dataKey="date" axisLine={false} tickLine={false} /><YAxis domain={[chartMin, chartMax]} axisLine={false} tickLine={false} width={32} /><Tooltip /><Area type="monotone" dataKey="value" stroke="#ff5b17" strokeWidth={3} fill="url(#weightFill)" dot={{ r: 4, fill: "#fff", stroke: "#ff5b17", strokeWidth: 2 }} /></AreaChart></ResponsiveContainer></div></article><article className="surface-card photo-card"><div className="card-head"><div><span className="card-kicker">FOTO PROGRESSO</span><h3>Confronta nel tempo</h3></div></div>{photo ? <img src={photo} alt="Foto progresso caricata" /> : <div className="photo-placeholder"><Camera size={28} /><strong>Aggiungi una foto</strong><p>Resta solo nel browser di questo dispositivo.</p></div>}<label className="secondary-button full"><Upload size={17} /> {photo ? "Sostituisci foto" : "Carica foto"}<input type="file" accept="image/*" capture="environment" hidden onChange={(event) => { const file = event.target.files?.[0]; if (file) setPhoto(URL.createObjectURL(file)); }} /></label></article></section><section className="surface-card review-card"><div className="review-score"><strong>8.6</strong><span>/10</span></div><div><span className="card-kicker">REVISIONE SETTIMANALE</span><h3>Stai progredendo al ritmo giusto</h3><p>La costanza è alta e la perdita di peso è graduale. Manteniamo il volume attuale e aumentiamo una sola serie la prossima settimana se il recupero resta buono.</p></div><button className="text-button">Apri revisione <ChevronRight size={16} /></button></section></> : <><section className="summary-grid"><SummaryCard label="Battito a riposo" value="60 bpm" detail="−4 bpm in 30 giorni" icon={HeartPulse} tone="red" /><SummaryCard label="Calorie attive" value="486 kcal" detail="Obiettivo 550 kcal" icon={Flame} tone="orange" /><SummaryCard label="Sonno" value="7h 38m" detail="Qualità buona" icon={Activity} tone="blue" /><SummaryCard label="BMI" value={bmi({ ...profile, weight: currentWeight }).toFixed(1)} detail="Intervallo di riferimento" icon={Target} tone="green" /></section><section className="two-column chart-layout"><article className="surface-card chart-card"><div className="card-head"><div><span className="card-kicker">APPLE WATCH</span><h3>Frequenza cardiaca</h3></div><span className="sync-badge"><span /> Demo UI</span></div><div className="chart-wrap"><ResponsiveContainer width="100%" height="100%"><LineChart data={HEART_SEED}><CartesianGrid vertical={false} stroke="#ece5dc" /><XAxis dataKey="label" axisLine={false} tickLine={false} /><YAxis domain={[50, 155]} axisLine={false} tickLine={false} width={32} /><Tooltip /><Line type="monotone" dataKey="workout" name="Allenamento" stroke="#eb4560" strokeWidth={3} dot={false} /><Line type="monotone" dataKey="rest" name="Riposo" stroke="#445bd5" strokeWidth={2.5} dot={false} /></LineChart></ResponsiveContainer></div><div className="chart-legend"><span><i className="pink" /> Allenamento</span><span><i className="blue" /> Riposo</span></div></article><article className="surface-card health-insights"><span className="card-kicker">INSIGHT</span><h3>Recupero positivo</h3><div className="health-score"><span>82</span><div><strong>Prontezza alta</strong><p>Battito a riposo e sonno indicano un buon recupero.</p></div></div><ul><li><Check size={15} /> Frequenza cardiaca nella tua norma</li><li><Check size={15} /> Sonno superiore alla media settimanale</li><li><Check size={15} /> Nessun segnale di sovraccarico</li></ul><button className="secondary-button full" onClick={() => toast.success("Dati salute aggiornati")}><RefreshCw size={17} /> Aggiorna dati</button></article></section></>}
+    {view === "progress" ? <><section className="summary-grid"><SummaryCard label="Peso attuale" value={`${currentWeight.toFixed(1)} kg`} detail={`${lost >= 0 ? "−" : "+"}${Math.abs(lost).toFixed(1)} kg dall’inizio`} icon={TrendingDown} tone="orange" /><SummaryCard label="Girovita" value={`${metrics.waist} cm`} detail="Tocca Modifica misure per aggiornare" icon={Target} tone="blue" /><SummaryCard label="Allenamenti" value={`${metrics.workoutsCompleted}`} detail={`${completionPct}% sul ciclo recente`} icon={Dumbbell} tone="green" /><SummaryCard label="Costanza" value={`${metrics.streakDays} giorni`} detail={metrics.lastWorkoutDate ? `Ultimo: ${metrics.lastWorkoutDate}` : "Completa una sessione"} icon={Flame} tone="orange" /></section>
+    <button className="secondary-button full metrics-edit-btn" onClick={() => { setWaistDraft(String(metrics.waist)); setWorkoutsDraft(String(metrics.workoutsCompleted)); setStreakDraft(String(metrics.streakDays)); setEditOpen(true); }}><Settings2 size={17} /> Modifica misure e contatori</button>
+    <section className="two-column chart-layout"><article className="surface-card chart-card"><div className="card-head"><div><span className="card-kicker">ANDAMENTO</span><h3>Peso corporeo</h3></div><div className="inline-add"><Input type="number" step="0.1" value={weight} onChange={(event) => setWeight(event.target.value)} placeholder="kg" /><button onClick={saveWeight}><Plus size={17} /></button></div></div><p className="chart-sync-note">Allineato al profilo: {profile.weight.toFixed(1)} kg</p><div className="chart-wrap"><ResponsiveContainer width="100%" height="100%"><AreaChart data={weightData}><defs><linearGradient id="weightFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#ff5b17" stopOpacity={0.25} /><stop offset="100%" stopColor="#ff5b17" stopOpacity={0} /></linearGradient></defs><CartesianGrid vertical={false} stroke="#ece5dc" /><XAxis dataKey="date" axisLine={false} tickLine={false} /><YAxis domain={[chartMin, chartMax]} axisLine={false} tickLine={false} width={32} /><Tooltip /><Area type="monotone" dataKey="value" stroke="#ff5b17" strokeWidth={3} fill="url(#weightFill)" dot={{ r: 4, fill: "#fff", stroke: "#ff5b17", strokeWidth: 2 }} /></AreaChart></ResponsiveContainer></div></article><article className="surface-card photo-card"><div className="card-head"><div><span className="card-kicker">FOTO PROGRESSO</span><h3>Confronta nel tempo</h3></div></div>{metrics.photoDataUrl ? <img src={metrics.photoDataUrl} alt="Foto progresso caricata" /> : <div className="photo-placeholder"><Camera size={28} /><strong>Aggiungi una foto</strong><p>Salvata in questo dispositivo.</p></div>}<label className="secondary-button full"><Upload size={17} /> {metrics.photoDataUrl ? "Sostituisci foto" : "Carica foto"}<input type="file" accept="image/*" capture="environment" hidden onChange={(event) => { const file = event.target.files?.[0]; if (file) savePhoto(file); }} /></label></article></section><section className="surface-card review-card"><div className="review-score"><strong>{reviewScore.toFixed(1)}</strong><span>/10</span></div><div><span className="card-kicker">REVISIONE SETTIMANALE</span><h3>Stai progredendo al ritmo giusto</h3><p>Costanza {metrics.streakDays} giorni · {metrics.workoutsCompleted} allenamenti · peso {currentWeight.toFixed(1)} kg.</p></div><button className="text-button" onClick={() => setReviewOpen(true)}>Apri revisione <ChevronRight size={16} /></button></section>
+    <Dialog open={editOpen} onOpenChange={setEditOpen}><DialogContent className="app-dialog"><DialogHeader><DialogTitle>Modifica misure</DialogTitle><DialogDescription>Questi valori aggiornano le card Progressi e il profilo riassuntivo.</DialogDescription></DialogHeader><div className="form-stack"><label>Girovita (cm)<Input type="number" value={waistDraft} onChange={(event) => setWaistDraft(event.target.value)} /></label><label>Allenamenti completati<Input type="number" value={workoutsDraft} onChange={(event) => setWorkoutsDraft(event.target.value)} /></label><label>Giorni di costanza<Input type="number" value={streakDraft} onChange={(event) => setStreakDraft(event.target.value)} /></label><button className="primary-button full" onClick={() => { setMetrics({ ...metrics, waist: Number(waistDraft) || metrics.waist, workoutsCompleted: Math.max(0, Number(workoutsDraft) || 0), streakDays: Math.max(0, Number(streakDraft) || 0) }); setEditOpen(false); toast.success("Misure aggiornate"); }}>Salva</button></div></DialogContent></Dialog>
+    <Dialog open={reviewOpen} onOpenChange={setReviewOpen}><DialogContent className="app-dialog"><DialogHeader><DialogTitle>Revisione settimanale</DialogTitle><DialogDescription>Sintesi basata sui tuoi dati salvati.</DialogDescription></DialogHeader><div className="form-stack review-body"><p><strong>Punteggio {reviewScore.toFixed(1)}/10</strong></p><p>Peso: {currentWeight.toFixed(1)} kg ({lost >= 0 ? "−" : "+"}{Math.abs(lost).toFixed(1)} kg dall’inizio).</p><p>Girovita: {metrics.waist} cm · Costanza: {metrics.streakDays} giorni · Sessioni: {metrics.workoutsCompleted}.</p><p>{lost > 0 ? "La perdita di peso è graduale: mantieni il volume attuale." : "Concentriamoci su costanza e qualità del movimento questa settimana."}</p><button className="primary-button full" onClick={() => setReviewOpen(false)}>Chiudi</button></div></DialogContent></Dialog>
+    </> : <><section className="summary-grid"><SummaryCard label="Battito a riposo" value="—" detail="Richiede Apple Watch" icon={HeartPulse} tone="red" /><SummaryCard label="Calorie attive" value="—" detail="Demo non collegata" icon={Flame} tone="orange" /><SummaryCard label="Sonno" value="—" detail="Demo non collegata" icon={Activity} tone="blue" /><SummaryCard label="BMI" value={bmi({ ...profile, weight: currentWeight }).toFixed(1)} detail="Calcolato dal profilo" icon={Target} tone="green" /></section><section className="two-column chart-layout"><article className="surface-card chart-card"><div className="card-head"><div><span className="card-kicker">APPLE WATCH</span><h3>Frequenza cardiaca</h3></div><span className="sync-badge"><span /> Demo UI</span></div><div className="chart-wrap"><ResponsiveContainer width="100%" height="100%"><LineChart data={HEART_SEED}><CartesianGrid vertical={false} stroke="#ece5dc" /><XAxis dataKey="label" axisLine={false} tickLine={false} /><YAxis domain={[50, 155]} axisLine={false} tickLine={false} width={32} /><Tooltip /><Line type="monotone" dataKey="workout" name="Allenamento" stroke="#eb4560" strokeWidth={3} dot={false} /><Line type="monotone" dataKey="rest" name="Riposo" stroke="#445bd5" strokeWidth={2.5} dot={false} /></LineChart></ResponsiveContainer></div><p className="chart-sync-note">Grafico di esempio: nessun dispositivo collegato.</p><div className="chart-legend"><span><i className="pink" /> Allenamento</span><span><i className="blue" /> Riposo</span></div></article><article className="surface-card health-insights"><span className="card-kicker">INSIGHT</span><h3>Dati salute</h3><div className="health-score"><span>—</span><div><strong>Watch non collegato</strong><p>BMI e peso restano calcolati dal tuo profilo.</p></div></div><ul><li><Check size={15} /> BMI attuale: {bmi({ ...profile, weight: currentWeight }).toFixed(1)}</li><li><Check size={15} /> Peso profilo: {profile.weight.toFixed(1)} kg</li><li><Check size={15} /> Costanza allenamenti: {metrics.streakDays} giorni</li></ul><button className="secondary-button full" onClick={() => toast("Collegamento Apple Watch non disponibile in questa web app")}><RefreshCw size={17} /> Aggiorna dati</button></article></section></>}
   </div>;
 }
 function SummaryCard({ label, value, detail, icon: Icon, tone }: { label: string; value: string; detail: string; icon: LucideIcon; tone: string }) { return <article className={`summary-card ${tone}`}><span><Icon size={20} /></span><small>{label}</small><strong>{value}</strong><p>{detail}</p></article>; }
 
-function Coach({ userId, profile, voiceEnabled, setVoiceEnabled, todayActivity, setTodayActivity }: { userId: string; profile: Profile; voiceEnabled: boolean; setVoiceEnabled: (value: boolean) => void; todayActivity: string; setTodayActivity: (value: string) => void }) {
-  const [messages, setMessages] = useUserState<CoachMessage[]>(userId, "addome-coach", [{ id: "welcome", role: "coach", text: `Ciao ${profile.name}. Oggi hai una sessione core di 24 minuti. Come ti senti?` }]);
+function Coach({ userId, profile, voiceEnabled, setVoiceEnabled, todayActivity, setTodayActivity, consumed, target, steps, water }: { userId: string; profile: Profile; voiceEnabled: boolean; setVoiceEnabled: (value: boolean) => void; todayActivity: string; setTodayActivity: (value: string) => void; consumed: number; target: number; steps: number; water: number }) {
+  const remaining = Math.max(target - consumed, 0);
+  const [messages, setMessages] = useUserState<CoachMessage[]>(userId, "addome-coach", [{ id: "welcome", role: "coach", text: `Ciao ${profile.name}. Oggi hai ${todayActivity}. Come ti senti?` }]);
   const [draft, setDraft] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), [messages]);
   const answer = (text: string) => {
     const lower = text.toLowerCase();
+    if (/(ripristin|rimetti|riprend|torna).*core|core di nuovo|annulla (la )?sostitu/.test(lower)) {
+      setTodayActivity("Core · 24 min");
+      return "Ok: ripristino la sessione core di oggi (24 minuti). La rivedi in Oggi e Allenamenti.";
+    }
     const mentionsReplace = /(annull|sostitu|mettiamo|invece|al posto|cambio|cambiamo|skip|salt)/.test(lower);
     const sportMatch = lower.match(/(beach\s*volley|pallavolo|nuoto|corsa|running|yoga|pilates|calcio|tennis|caminat|camminat|bici|ciclismo|hiit)/);
     if (mentionsReplace || sportMatch) {
@@ -545,11 +644,13 @@ function Coach({ userId, profile, voiceEnabled, setVoiceEnabled, todayActivity, 
       return `Perfetto: per oggi annullo la sessione core e metto ${label}. La vedrai aggiornata in Oggi e Allenamenti. Se poi vuoi fare anche un core breve di 10 minuti, dimmelo.`;
     }
     if (lower.includes("schiena") || lower.includes("dolore")) return "Se senti dolore vero, interrompi. Per oggi sostituisci il Side Plank con Bird Dog e riduci le tenute a 20 secondi. Se il dolore persiste, confrontati con un professionista sanitario.";
-    if (lower.includes("mang") || lower.includes("fame") || lower.includes("cena")) return "Ti restano circa 1.190 kcal nel piano di oggi. Per cena scegli una fonte proteica, verdure e una porzione di carboidrati: ad esempio salmone, patate e insalata.";
-    if (lower.includes("stanco") || lower.includes("sonno")) return "Il recupero risulta buono, ma ascolta la percezione reale: prova il riscaldamento e, se resti scarico, scegli l’intensità più facile senza saltare lo stretching.";
+    if (/(peso|quanto peso|kg)/.test(lower)) return `Il tuo peso profilo è ${profile.weight.toFixed(1)} kg (obiettivo ${profile.goalWeight} kg). Ti restano ${(profile.weight - profile.goalWeight).toFixed(1)} kg.`;
+    if (lower.includes("mang") || lower.includes("fame") || lower.includes("cena") || lower.includes("calorie")) return `Hai consumato ${consumed} kcal su ${target}. Ti restano circa ${remaining} kcal. Per cena scegli proteine, verdure e una porzione di carboidrati.`;
+    if (lower.includes("passi") || lower.includes("acqua")) return `Ora sei a ${steps.toLocaleString("it-IT")} passi e ${water}/8 bicchieri d’acqua. Obiettivo passi: 9.000.`;
+    if (lower.includes("stanco") || lower.includes("sonno")) return "Ascolta la percezione reale: prova il riscaldamento e, se resti scarico, scegli l’intensità più facile senza saltare lo stretching.";
     if (lower.includes("aument") || lower.includes("difficile")) return "Dopo la sessione registrerò il tuo feedback. Se due allenamenti consecutivi risultano facili, aumenterò una serie; se sono troppo impegnativi, ridurrò tempi o sostituirò l’esercizio.";
     if (lower.includes("oggi") && lower.includes("attività")) return `Ok, dimmi pure quale attività vuoi fare al posto del core di oggi (es. beach volley, corsa, yoga) e aggiorno il piano. Ora risulta: ${todayActivity}.`;
-    return "Ricevuto. Posso adattare intensità, esercizio, durata oppure sostituire l’allenamento di oggi con un’altra attività. Cosa preferisci?";
+    return `Ricevuto. Oggi: ${todayActivity}, ${remaining} kcal residue, ${steps.toLocaleString("it-IT")} passi. Posso adattare intensità, esercizio, durata oppure sostituire l’allenamento. Cosa preferisci?`;
   };
   const send = (preset?: string) => {
     const text = (preset ?? draft).trim();
@@ -565,17 +666,25 @@ function Coach({ userId, profile, voiceEnabled, setVoiceEnabled, todayActivity, 
       window.speechSynthesis.speak(utterance);
     }
   };
-  return <div className="page-stack coach-page"><PageHeading eyebrow="COACH" title="Il tuo supporto quotidiano" description="Chiedi indicazioni su allenamento, alimentazione, recupero e adattamenti." action={<label className="voice-control">{voiceEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />} Voce <Switch checked={voiceEnabled} onCheckedChange={setVoiceEnabled} /></label>} /><section className="coach-layout"><article className="chat-card"><div className="chat-head"><span className="coach-avatar"><Bot size={23} /></span><div><strong>Coach GYM & FOOD</strong><small><span /> Online · conosce il tuo piano</small></div></div><div className="messages">{messages.map((message) => <div key={message.id} className={`message ${message.role}`}><span>{message.role === "coach" ? <Bot size={17} /> : initials(profile.name)}</span><p>{message.text}</p></div>)}<div ref={endRef} /></div><div className="suggestions">{["Sono stanco oggi", "Cosa mangio a cena?", "Oggi annulliamo e mettiamo beach volley"].map((suggestion) => <button key={suggestion} onClick={() => send(suggestion)}>{suggestion}</button>)}</div><div className="composer"><Textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); send(); } }} placeholder="Scrivi al tuo coach…" /><button onClick={() => send()} aria-label="Invia messaggio"><Send size={19} /></button></div></article><aside className="coach-context"><article className="surface-card"><span className="card-kicker">CONTESTO DI OGGI</span><h3>Cosa vede il coach</h3><ContextRow icon={HeartPulse} label="Recupero" value="82 · alto" /><ContextRow icon={Dumbbell} label="Sessione" value={todayActivity} /><ContextRow icon={Utensils} label="Calorie" value="590 / 1.780" /><ContextRow icon={Footprints} label="Passi" value="6.840" /></article><article className="surface-card privacy-note"><span><Check size={17} /></span><div><strong>Dati sotto controllo</strong><p>Le conversazioni e le preferenze restano salvate nel browser.</p></div></article></aside></section></div>;
+  return <div className="page-stack coach-page"><PageHeading eyebrow="COACH" title="Il tuo supporto quotidiano" description="Chiedi indicazioni su allenamento, alimentazione, recupero e adattamenti." action={<label className="voice-control">{voiceEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />} Voce <Switch checked={voiceEnabled} onCheckedChange={setVoiceEnabled} /></label>} /><section className="coach-layout"><article className="chat-card"><div className="chat-head"><span className="coach-avatar"><Bot size={23} /></span><div><strong>Coach GYM & FOOD</strong><small><span /> Online · conosce il tuo piano</small></div></div><div className="messages">{messages.map((message) => <div key={message.id} className={`message ${message.role}`}><span>{message.role === "coach" ? <Bot size={17} /> : initials(profile.name)}</span><p>{message.text}</p></div>)}<div ref={endRef} /></div><div className="suggestions">{["Sono stanco oggi", "Cosa mangio a cena?", "Oggi annulliamo e mettiamo beach volley", "Ripristina il core"].map((suggestion) => <button key={suggestion} onClick={() => send(suggestion)}>{suggestion}</button>)}</div><div className="composer"><Textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); send(); } }} placeholder="Scrivi al tuo coach…" /><button onClick={() => send()} aria-label="Invia messaggio"><Send size={19} /></button></div></article><aside className="coach-context"><article className="surface-card"><span className="card-kicker">CONTESTO DI OGGI</span><h3>Cosa vede il coach</h3><ContextRow icon={HeartPulse} label="Acqua" value={`${water}/8`} /><ContextRow icon={Dumbbell} label="Sessione" value={todayActivity} /><ContextRow icon={Utensils} label="Calorie" value={`${consumed} / ${target}`} /><ContextRow icon={Footprints} label="Passi" value={steps.toLocaleString("it-IT")} /></article><article className="surface-card privacy-note"><span><Check size={17} /></span><div><strong>Dati sotto controllo</strong><p>Le conversazioni e le preferenze restano salvate nel browser.</p></div></article></aside></section></div>;
 }
 function ContextRow({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value: string }) { return <div className="context-row"><span><Icon size={17} /></span><small>{label}</small><strong>{value}</strong></div>; }
 
-function ProfileView({ userId, profile, setProfile, target, voiceEnabled, setVoiceEnabled, openEditor, exportData, email, onLogout, onCloudPush, onCloudPull }: { userId: string; profile: Profile; setProfile: (profile: Profile) => void; target: number; voiceEnabled: boolean; setVoiceEnabled: (value: boolean) => void; openEditor: () => void; exportData: () => void; email: string; onLogout: () => void | Promise<void>; onCloudPush: () => void; onCloudPull: () => void }) {
+function ProfileView({ userId, profile, setProfile, target, voiceEnabled, setVoiceEnabled, openEditor, exportData, email, metrics, workoutDone, mealsLogged, mealsTotal, onLogout, onCloudPush, onCloudPull }: { userId: string; profile: Profile; setProfile: (profile: Profile) => void; target: number; voiceEnabled: boolean; setVoiceEnabled: (value: boolean) => void; openEditor: () => void; exportData: () => void; email: string; metrics: ProgressMetrics; workoutDone: boolean; mealsLogged: number; mealsTotal: number; onLogout: () => void | Promise<void>; onCloudPush: () => void; onCloudPull: () => void }) {
   const currentBmi = bmi(profile);
   const [autoAdapt, setAutoAdapt] = useUserState(userId, "addome-auto-adapt", true);
   const [notifyWorkout, setNotifyWorkout] = useUserState(userId, "addome-notify-workout", true);
   const [notifyMeals, setNotifyMeals] = useUserState(userId, "addome-notify-meals", true);
   const [notifyCoach, setNotifyCoach] = useUserState(userId, "addome-notify-coach", false);
   const [notifyWeekly, setNotifyWeekly] = useUserState(userId, "addome-notify-weekly", true);
+  useEffect(() => {
+    const prefs = { workout: notifyWorkout, meals: notifyMeals, coach: notifyCoach, weekly: notifyWeekly };
+    runNotificationChecks(prefs, { workoutDone, mealsLogged, mealsTotal });
+    const timer = window.setInterval(() => {
+      runNotificationChecks(prefs, { workoutDone, mealsLogged, mealsTotal });
+    }, 5 * 60_000);
+    return () => window.clearInterval(timer);
+  }, [notifyWorkout, notifyMeals, notifyCoach, notifyWeekly, workoutDone, mealsLogged, mealsTotal]);
   const requestPushPermission = async () => {
     if (!("Notification" in window)) {
       toast.error("Questo browser non supporta le notifiche");
@@ -583,7 +692,11 @@ function ProfileView({ userId, profile, setProfile, target, voiceEnabled, setVoi
     }
     const permission = await Notification.requestPermission();
     if (permission === "granted") {
-      toast.success("Notifiche abilitate su questo dispositivo");
+      toast.success("Notifiche abilitate: i promemoria partono con l’app aperta");
+      runNotificationChecks(
+        { workout: notifyWorkout, meals: notifyMeals, coach: notifyCoach, weekly: notifyWeekly },
+        { workoutDone, mealsLogged, mealsTotal },
+      );
       try {
         new Notification("GYM & FOOD", { body: "Promemoria allenamento e pasti attivati." });
       } catch {
@@ -595,7 +708,7 @@ function ProfileView({ userId, profile, setProfile, target, voiceEnabled, setVoi
       toast("Permesso notifiche non concesso");
     }
   };
-  return <div className="page-stack"><PageHeading eyebrow="PROFILO" title="Il tuo percorso, alle tue condizioni" description="Obiettivi, preferenze e dati personali in un unico posto." action={<button className="secondary-button" onClick={openEditor}><Settings2 size={17} /> Modifica profilo</button>} /><section className="profile-banner"><span className="profile-avatar-large">{initials(profile.name)}</span><div><h2>{profile.name}</h2><p>{email}</p><div><span><Flame size={15} /> 12 giorni</span><span><Star size={15} /> 1.840 XP</span><span><Dumbbell size={15} /> 15 workout</span></div></div><span className="premium-pill"><Sparkles size={15} /> PREMIUM</span></section><section className="summary-grid"><SummaryCard label="Obiettivo peso" value={`${profile.goalWeight} kg`} detail={`${(profile.weight - profile.goalWeight).toFixed(1)} kg rimanenti`} icon={Target} tone="orange" /><SummaryCard label="BMI attuale" value={currentBmi.toFixed(1)} detail={currentBmi < 25 ? "Intervallo nella norma" : "Da leggere con il contesto"} icon={Activity} tone="blue" /><SummaryCard label="Obiettivo calorie" value={`${target} kcal`} detail="Deficit moderato stimato" icon={Flame} tone="orange" /><SummaryCard label="Allenamenti" value={`${profile.weeklyGoal}/sett.`} detail="Obiettivo personale" icon={Dumbbell} tone="green" /></section><section className="settings-layout"><article className="surface-card settings-card"><div className="card-head"><div><span className="card-kicker">PREFERENZE</span><h3>Esperienza</h3></div></div><SettingRow icon={Volume2} label="Guida vocale" detail="Istruzioni durante gli esercizi" control={<Switch checked={voiceEnabled} onCheckedChange={setVoiceEnabled} />} /><SettingRow icon={Watch} label="Dati Apple Watch" detail="Demo UI · non collegato" control={<span className="sync-badge"><span /> Demo</span>} /><SettingRow icon={Sparkles} label="Adattamento automatico" detail="Serie ed esercizi seguono il feedback" control={<Switch checked={autoAdapt} onCheckedChange={setAutoAdapt} />} /></article><article className="surface-card settings-card"><div className="card-head"><div><span className="card-kicker">NOTIFICHE</span><h3>Promemoria</h3></div></div><SettingRow icon={Bell} label="Allenamento" detail="Promemoria sessione del giorno" control={<Switch checked={notifyWorkout} onCheckedChange={setNotifyWorkout} />} /><SettingRow icon={Utensils} label="Pasti" detail="Promemoria diario alimentare" control={<Switch checked={notifyMeals} onCheckedChange={setNotifyMeals} />} /><SettingRow icon={MessageCircle} label="Coach" detail="Suggerimenti e check-in" control={<Switch checked={notifyCoach} onCheckedChange={setNotifyCoach} />} /><SettingRow icon={BarChart3} label="Revisione settimanale" detail="Riepilogo ogni domenica" control={<Switch checked={notifyWeekly} onCheckedChange={setNotifyWeekly} />} /><button className="settings-action" onClick={() => void requestPushPermission()}><Bell size={18} /><span><strong>Attiva notifiche dispositivo</strong><small>Chiede il permesso a Safari/iPhone</small></span><ChevronRight size={17} /></button></article><article className="surface-card settings-card"><div className="card-head"><div><span className="card-kicker">I TUOI DATI</span><h3>Backup, cloud e account</h3></div></div><button className="settings-action" onClick={exportData}><Download size={18} /><span><strong>Esporta backup</strong><small>Scarica profilo e progressi in JSON</small></span><ChevronRight size={17} /></button><label className="settings-action"><Upload size={18} /><span><strong>Importa backup</strong><small>Ripristina dati da un file</small></span><ChevronRight size={17} /><input type="file" accept="application/json" hidden onChange={(event) => importBackup(event, setProfile)} /></label><button className="settings-action" onClick={onCloudPush}><RefreshCw size={18} /><span><strong>Carica sul cloud</strong><small>Sincronizza via API /api/sync</small></span><ChevronRight size={17} /></button><button className="settings-action" onClick={onCloudPull}><Download size={18} /><span><strong>Scarica dal cloud</strong><small>Ripristina l’ultimo sync remoto</small></span><ChevronRight size={17} /></button><button className="settings-action danger" onClick={() => void onLogout()}><Trash2 size={18} /><span><strong>Esci dall’account</strong><small>I dati restano salvati su questo dispositivo</small></span><ChevronRight size={17} /></button></article></section></div>;
+  return <div className="page-stack"><PageHeading eyebrow="PROFILO" title="Il tuo percorso, alle tue condizioni" description="Obiettivi, preferenze e dati personali in un unico posto." action={<button className="secondary-button" onClick={openEditor}><Settings2 size={17} /> Modifica profilo</button>} /><section className="profile-banner"><span className="profile-avatar-large">{initials(profile.name)}</span><div><h2>{profile.name}</h2><p>{email}</p><div><span><Flame size={15} /> {metrics.streakDays} giorni</span><span><Star size={15} /> {Math.round(metrics.workoutsCompleted * 120)} XP</span><span><Dumbbell size={15} /> {metrics.workoutsCompleted} workout</span></div></div><span className="premium-pill"><Sparkles size={15} /> LOCALE</span></section><section className="summary-grid"><SummaryCard label="Obiettivo peso" value={`${profile.goalWeight} kg`} detail={`${(profile.weight - profile.goalWeight).toFixed(1)} kg rimanenti`} icon={Target} tone="orange" /><SummaryCard label="BMI attuale" value={currentBmi.toFixed(1)} detail={currentBmi < 25 ? "Intervallo nella norma" : "Da leggere con il contesto"} icon={Activity} tone="blue" /><SummaryCard label="Obiettivo calorie" value={`${target} kcal`} detail="Deficit moderato stimato" icon={Flame} tone="orange" /><SummaryCard label="Allenamenti" value={`${profile.weeklyGoal}/sett.`} detail={`${metrics.workoutsCompleted} completati in totale`} icon={Dumbbell} tone="green" /></section><section className="settings-layout"><article className="surface-card settings-card"><div className="card-head"><div><span className="card-kicker">PREFERENZE</span><h3>Esperienza</h3></div></div><SettingRow icon={Volume2} label="Guida vocale" detail="Istruzioni durante gli esercizi" control={<Switch checked={voiceEnabled} onCheckedChange={setVoiceEnabled} />} /><SettingRow icon={Watch} label="Dati Apple Watch" detail="Demo UI · non collegato" control={<span className="sync-badge"><span /> Demo</span>} /><SettingRow icon={Sparkles} label="Adattamento automatico" detail="Serie ed esercizi seguono il feedback" control={<Switch checked={autoAdapt} onCheckedChange={setAutoAdapt} />} /></article><article className="surface-card settings-card"><div className="card-head"><div><span className="card-kicker">NOTIFICHE</span><h3>Promemoria</h3></div></div><SettingRow icon={Bell} label="Allenamento" detail="Dopo le 17 se non hai fatto la sessione" control={<Switch checked={notifyWorkout} onCheckedChange={setNotifyWorkout} />} /><SettingRow icon={Utensils} label="Pasti" detail="Promemoria diario a metà giornata" control={<Switch checked={notifyMeals} onCheckedChange={setNotifyMeals} />} /><SettingRow icon={MessageCircle} label="Coach" detail="Check-in serale" control={<Switch checked={notifyCoach} onCheckedChange={setNotifyCoach} />} /><SettingRow icon={BarChart3} label="Revisione settimanale" detail="Promemoria la domenica" control={<Switch checked={notifyWeekly} onCheckedChange={setNotifyWeekly} />} /><button className="settings-action" onClick={() => void requestPushPermission()}><Bell size={18} /><span><strong>Attiva notifiche dispositivo</strong><small>Funzionano con l’app aperta / in PWA</small></span><ChevronRight size={17} /></button></article><article className="surface-card settings-card"><div className="card-head"><div><span className="card-kicker">I TUOI DATI</span><h3>Backup, cloud e account</h3></div></div><button className="settings-action" onClick={exportData}><Download size={18} /><span><strong>Esporta backup</strong><small>Scarica profilo e progressi in JSON</small></span><ChevronRight size={17} /></button><label className="settings-action"><Upload size={18} /><span><strong>Importa backup</strong><small>Ripristina dati da un file</small></span><ChevronRight size={17} /><input type="file" accept="application/json" hidden onChange={(event) => importBackup(event, setProfile)} /></label><button className="settings-action" onClick={onCloudPush}><RefreshCw size={18} /><span><strong>Carica sul cloud</strong><small>Sincronizza via API /api/sync</small></span><ChevronRight size={17} /></button><button className="settings-action" onClick={onCloudPull}><Download size={18} /><span><strong>Scarica dal cloud</strong><small>Ripristina l’ultimo sync remoto</small></span><ChevronRight size={17} /></button><button className="settings-action danger" onClick={() => void onLogout()}><Trash2 size={18} /><span><strong>Esci dall’account</strong><small>I dati restano salvati su questo dispositivo</small></span><ChevronRight size={17} /></button></article></section></div>;
 }
 function SettingRow({ icon: Icon, label, detail, control }: { icon: LucideIcon; label: string; detail: string; control: React.ReactNode }) { return <div className="setting-row"><span><Icon size={18} /></span><div><strong>{label}</strong><small>{detail}</small></div>{control}</div>; }
 
@@ -620,4 +733,20 @@ function ProfileEditor({ open, onOpenChange, profile, setProfile, weightData, se
 }
 
 function exportAllData(data: unknown) { const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), data }, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = `gym-food-backup-${new Date().toISOString().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(url); toast.success("Backup esportato"); }
-function importBackup(event: React.ChangeEvent<HTMLInputElement>, setProfile: (profile: Profile) => void) { const file = event.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => { try { const parsed = JSON.parse(String(reader.result)); if (parsed?.data?.profile) { setProfile(parsed.data.profile as Profile); toast.success("Profilo importato dal backup"); } else toast.error("Il file non contiene un profilo valido"); } catch { toast.error("Backup non leggibile"); } }; reader.readAsText(file); }
+function importBackup(event: React.ChangeEvent<HTMLInputElement>, setProfile: (profile: Profile) => void) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const parsed = JSON.parse(String(reader.result));
+      if (parsed?.data?.profile) {
+        setProfile(parsed.data.profile as Profile);
+        toast.success("Profilo importato. Ricarica l’app se vuoi ripristinare anche pasti/progressi dal JSON esportato.");
+      } else toast.error("Il file non contiene un profilo valido");
+    } catch {
+      toast.error("Backup non leggibile");
+    }
+  };
+  reader.readAsText(file);
+}
