@@ -626,7 +626,9 @@ function Coach({ userId, profile, voiceEnabled, setVoiceEnabled, todayActivity, 
   const [messages, setMessages] = useUserState<CoachMessage[]>(userId, "addome-coach", [{ id: "welcome", role: "coach", text: `Ciao ${profile.name}. Oggi hai ${todayActivity}. Come ti senti?` }]);
   const [draft, setDraft] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
-  useEffect(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), [messages]);
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
   const answer = (text: string) => {
     const lower = text.toLowerCase();
     if (/(ripristin|rimetti|riprend|torna).*core|core di nuovo|annulla (la )?sostitu/.test(lower)) {
