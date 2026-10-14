@@ -29,14 +29,23 @@ import {
 } from "@/lib/auth";
 import { loadUserValue, saveUserValue } from "@/lib/user-data";
 import { runNotificationChecks } from "@/lib/notifications";
+import { SetupWizard } from "@/app/setup-wizard";
+import {
+  buildPlan,
+  computeCalorieTarget,
+  computeMacros,
+  setupSummary,
+  type Exercise,
+  type Meal,
+  type Profile,
+  type ShoppingItem,
+  type UserSetup,
+  type WorkoutStage,
+} from "@/lib/plan";
 
 type TabKey = "home" | "workouts" | "nutrition" | "progress" | "coach" | "profile";
-type WorkoutStage = "Riscaldamento" | "Allenamento" | "Stretching";
-type Profile = { name: string; age: number; height: number; weight: number; goalWeight: number; weeklyGoal: number };
-type Exercise = { id: string; name: string; focus: string; seconds: number; stage: WorkoutStage; cue: string; videoId: string; side?: "Sinistra" | "Destra"; set?: number };
-type Meal = { id: string; slot: string; name: string; calories: number; protein: number; carbs: number; fat: number; checked: boolean };
-type ShoppingItem = { id: string; name: string; category: string; checked: boolean };
 type CoachMessage = { id: string; role: "user" | "coach"; text: string };
+type WorkoutMeta = { title: string; summary: string; focus: string; weekLabel: string; goalLabel: string; dietLabel: string };
 type ProgressMetrics = {
   waist: number;
   workoutsCompleted: number;
@@ -60,8 +69,9 @@ function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function macroTargets(profile: Profile) {
-  const calories = calorieTarget(profile);
+function macroTargets(setup: UserSetup | null, profile: Profile) {
+  if (setup) return computeMacros(setup, computeCalorieTarget(setup));
+  const calories = Math.round(10 * profile.weight + 6.25 * profile.height - 5 * profile.age + 5);
   const protein = Math.round(profile.weight * 1.8);
   const fat = Math.round((calories * 0.28) / 9);
   const carbs = Math.max(80, Math.round((calories - protein * 4 - fat * 9) / 4));
@@ -224,7 +234,11 @@ function useUserState<T>(userId: string, key: string, fallback: T) {
 function initials(name: string) { return name.split(" ").map((part) => part[0]).join("").slice(0, 2).toUpperCase(); }
 function formatTimer(seconds: number) { return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`; }
 function bmi(profile: Profile) { const meters = profile.height / 100; return profile.weight / (meters * meters); }
-function calorieTarget(profile: Profile) { const bmr = 10 * profile.weight + 6.25 * profile.height - 5 * profile.age + 5; return Math.round(bmr * 1.42 - 380); }
+function calorieTarget(profile: Profile, setup: UserSetup | null = null) {
+  if (setup) return computeCalorieTarget(setup);
+  const bmr = 10 * profile.weight + 6.25 * profile.height - 5 * profile.age + 5;
+  return Math.round(bmr * 1.42 - 380);
+}
 
 function AuthScreen({ onAuthenticated }: { onAuthenticated: (session: Session) => void }) {
   const [mode, setMode] = useState<"login" | "register">("login");
@@ -346,30 +360,50 @@ export default function HomePage() {
 
 function AuthenticatedApp({ session, onSessionChange }: { session: Session; onSessionChange: (session: Session | null) => void }) {
   const [tab, setTab] = useTabNavigation();
-  const [profile, setProfile] = useUserState<Profile>(session.accountId, "addome-profile", {
+  const [setup, setSetup] = useUserState<UserSetup | null>(session.accountId, "gf2-setup", null);
+  const [onboarded, setOnboarded] = useUserState(session.accountId, "gf2-onboarded", false);
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [profile, setProfile] = useUserState<Profile>(session.accountId, "gf2-profile", {
     name: session.name,
-    age: 36,
-    height: 178,
-    weight: 76.2,
-    goalWeight: 70,
-    weeklyGoal: 4,
+    age: 30,
+    height: 170,
+    weight: 70,
+    goalWeight: 68,
+    weeklyGoal: 3,
   });
-  const [meals, setMeals] = useUserState<Meal[]>(session.accountId, "addome-meals", DEFAULT_MEALS);
-  const [shopping, setShopping] = useUserState<ShoppingItem[]>(session.accountId, "addome-shopping", DEFAULT_SHOPPING);
-  const [weightData, setWeightData] = useUserState(session.accountId, "addome-weight", WEIGHT_SEED);
-  const [completedWorkout, setCompletedWorkout] = useUserState(session.accountId, "addome-workout-done", false);
-  const [water, setWater] = useUserState(session.accountId, "addome-water", 5);
-  const [steps, setSteps] = useUserState(session.accountId, "addome-steps", 6840);
-  const [voiceEnabled, setVoiceEnabled] = useUserState(session.accountId, "addome-voice", true);
-  const [todayActivity, setTodayActivity] = useUserState<string>(session.accountId, "addome-today-activity", "Core · 24 min");
-  const [metrics, setMetrics] = useUserState<ProgressMetrics>(session.accountId, "addome-metrics", DEFAULT_METRICS);
+  const [meals, setMeals] = useUserState<Meal[]>(session.accountId, "gf2-meals", []);
+  const [shopping, setShopping] = useUserState<ShoppingItem[]>(session.accountId, "gf2-shopping", []);
+  const [weightData, setWeightData] = useUserState(session.accountId, "gf2-weight", [{ date: "Oggi", value: 70 }]);
+  const [completedWorkout, setCompletedWorkout] = useUserState(session.accountId, "gf2-workout-done", false);
+  const [water, setWater] = useUserState(session.accountId, "gf2-water", 0);
+  const [steps, setSteps] = useUserState(session.accountId, "gf2-steps", 0);
+  const [voiceEnabled, setVoiceEnabled] = useUserState(session.accountId, "gf2-voice", true);
+  const [todayActivity, setTodayActivity] = useUserState<string>(session.accountId, "gf2-today-activity", "Configura il piano");
+  const [workoutQueue, setWorkoutQueue] = useUserState<Exercise[]>(session.accountId, "gf2-workout-queue", WORKOUT_QUEUE);
+  const [workoutMeta, setWorkoutMeta] = useUserState<WorkoutMeta>(session.accountId, "gf2-workout-meta", {
+    title: "Il tuo allenamento",
+    summary: "Completa la configurazione per generare la sessione",
+    focus: "Definisci obiettivo e abitudini",
+    weekLabel: "Piano non ancora configurato",
+    goalLabel: "—",
+    dietLabel: "—",
+  });
+  const [metrics, setMetrics] = useUserState<ProgressMetrics>(session.accountId, "gf2-metrics", {
+    waist: 0,
+    workoutsCompleted: 0,
+    streakDays: 0,
+    lastWorkoutDate: "",
+    photoDataUrl: null,
+  });
+  const [coachMessages, setCoachMessages] = useUserState<CoachMessage[]>(session.accountId, "gf2-coach", []);
   const [workoutOpen, setWorkoutOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [clock, setClock] = useState(() => new Date());
   const consumed = meals.filter((meal) => meal.checked).reduce((sum, meal) => sum + meal.calories, 0);
-  const target = calorieTarget(profile);
+  const target = calorieTarget(profile, setup);
   const topbarDate = formatTopbarDate(clock);
-  const macros = macroTargets(profile);
+  const macros = macroTargets(setup, profile);
+  const setupReady = onboarded && !!setup;
 
   useEffect(() => {
     const timer = window.setInterval(() => setClock(new Date()), 60_000);
@@ -390,6 +424,44 @@ function AuthenticatedApp({ session, onSessionChange }: { session: Session; onSe
     setWeightData([...weightData.slice(0, -1), { ...last, value: profile.weight }]);
   }, [profile.weight, weightData, setWeightData]);
 
+  const applySetup = (nextSetup: UserSetup) => {
+    const plan = buildPlan(nextSetup);
+    setSetup(nextSetup);
+    setOnboarded(true);
+    setSetupOpen(false);
+    setProfile(plan.profile);
+    setMeals(plan.meals);
+    setShopping(plan.shopping);
+    setTodayActivity(plan.todayActivity);
+    setWorkoutQueue(plan.workoutQueue);
+    setWorkoutMeta({
+      title: plan.workoutTitle,
+      summary: plan.workoutSummary,
+      focus: plan.focus,
+      weekLabel: plan.weekLabel,
+      goalLabel: plan.goalLabel,
+      dietLabel: plan.dietLabel,
+    });
+    setWeightData([{ date: "Inizio", value: plan.profile.weight }, { date: "Oggi", value: plan.profile.weight }]);
+    setCompletedWorkout(false);
+    setWater(0);
+    setSteps(0);
+    setMetrics({
+      waist: Math.round(plan.profile.weight * 0.55 + 40),
+      workoutsCompleted: 0,
+      streakDays: 0,
+      lastWorkoutDate: "",
+      photoDataUrl: null,
+    });
+    setCoachMessages([{
+      id: "welcome",
+      role: "coach",
+      text: `Ciao ${plan.profile.name}. Piano pronto: obiettivo ${plan.goalLabel.toLowerCase()}, ${plan.calorieTarget} kcal/giorno, oggi ${plan.todayActivity}. Come ti senti?`,
+    }]);
+    setTab("home");
+    toast.success("Piano personalizzato attivato");
+  };
+
   const markWorkoutComplete = () => {
     const today = todayIso();
     if (metrics.lastWorkoutDate === today) {
@@ -409,7 +481,7 @@ function AuthenticatedApp({ session, onSessionChange }: { session: Session; onSe
   };
 
   const syncCloud = async (action: "pull" | "push") => {
-    const snapshot = { profile, meals, shopping, weightData, water, steps, voiceEnabled, completedWorkout, metrics, todayActivity };
+    const snapshot = { profile, meals, shopping, weightData, water, steps, voiceEnabled, completedWorkout, metrics, todayActivity, setup, workoutQueue, workoutMeta, onboarded };
     try {
       const response = await fetch("/api/sync", {
         method: "POST",
@@ -434,6 +506,10 @@ function AuthenticatedApp({ session, onSessionChange }: { session: Session; onSe
         setCompletedWorkout(result.payload.completedWorkout);
         if (result.payload.metrics) setMetrics(result.payload.metrics);
         if (result.payload.todayActivity) setTodayActivity(result.payload.todayActivity);
+        if (result.payload.setup) setSetup(result.payload.setup);
+        if (result.payload.workoutQueue) setWorkoutQueue(result.payload.workoutQueue);
+        if (result.payload.workoutMeta) setWorkoutMeta(result.payload.workoutMeta);
+        if (typeof result.payload.onboarded === "boolean") setOnboarded(result.payload.onboarded);
         toast.success("Dati scaricati dal cloud");
       } else if (action === "push") {
         toast.success("Dati sincronizzati sul cloud");
@@ -445,12 +521,26 @@ function AuthenticatedApp({ session, onSessionChange }: { session: Session; onSe
     }
   };
 
+  if (!setupReady || setupOpen) {
+    return (
+      <>
+        <SetupWizard
+          initialName={session.name}
+          initial={setup}
+          onComplete={applySetup}
+          onCancel={setupReady ? () => setSetupOpen(false) : undefined}
+        />
+        <Toaster position="top-center" richColors />
+      </>
+    );
+  }
+
   const renderView = () => {
-    if (tab === "home") return <Dashboard profile={profile} steps={steps} setSteps={setSteps} water={water} setWater={setWater} consumed={consumed} target={target} workoutDone={completedWorkout} startWorkout={() => setWorkoutOpen(true)} goTo={setTab} todayActivity={todayActivity} streakDays={metrics.streakDays} />;
-    if (tab === "workouts") return <Workouts startWorkout={() => setWorkoutOpen(true)} workoutDone={completedWorkout} todayActivity={todayActivity} />;
-    if (tab === "nutrition") return <Nutrition userId={session.accountId} meals={meals} setMeals={setMeals} shopping={shopping} setShopping={setShopping} target={target} macros={macros} />;
+    if (tab === "home") return <Dashboard profile={profile} steps={steps} setSteps={setSteps} water={water} setWater={setWater} consumed={consumed} target={target} workoutDone={completedWorkout} startWorkout={() => setWorkoutOpen(true)} goTo={setTab} todayActivity={todayActivity} streakDays={metrics.streakDays} workoutMeta={workoutMeta} setup={setup} />;
+    if (tab === "workouts") return <Workouts startWorkout={() => setWorkoutOpen(true)} workoutDone={completedWorkout} todayActivity={todayActivity} workoutQueue={workoutQueue} workoutMeta={workoutMeta} />;
+    if (tab === "nutrition") return <Nutrition userId={session.accountId} meals={meals} setMeals={setMeals} shopping={shopping} setShopping={setShopping} target={target} macros={macros} dietLabel={workoutMeta.dietLabel} />;
     if (tab === "progress") return <ProgressAndHealth profile={profile} setProfile={setProfile} weightData={weightData} setWeightData={setWeightData} metrics={metrics} setMetrics={setMetrics} />;
-    if (tab === "coach") return <Coach userId={session.accountId} profile={profile} voiceEnabled={voiceEnabled} setVoiceEnabled={setVoiceEnabled} todayActivity={todayActivity} setTodayActivity={setTodayActivity} consumed={consumed} target={target} steps={steps} water={water} />;
+    if (tab === "coach") return <Coach userId={session.accountId} profile={profile} voiceEnabled={voiceEnabled} setVoiceEnabled={setVoiceEnabled} todayActivity={todayActivity} setTodayActivity={setTodayActivity} consumed={consumed} target={target} steps={steps} water={water} messages={coachMessages} setMessages={setCoachMessages} setup={setup} />;
     return (
       <ProfileView
         userId={session.accountId}
@@ -460,12 +550,14 @@ function AuthenticatedApp({ session, onSessionChange }: { session: Session; onSe
         voiceEnabled={voiceEnabled}
         setVoiceEnabled={setVoiceEnabled}
         openEditor={() => setProfileOpen(true)}
-        exportData={() => exportAllData({ profile, meals, shopping, weightData, water, steps, metrics, todayActivity })}
+        exportData={() => exportAllData({ profile, meals, shopping, weightData, water, steps, metrics, todayActivity, setup, workoutMeta })}
         email={session.email}
         metrics={metrics}
         workoutDone={completedWorkout}
         mealsLogged={meals.filter((meal) => meal.checked).length}
         mealsTotal={meals.length}
+        setup={setup}
+        onReconfigure={() => setSetupOpen(true)}
         onLogout={async () => {
           await logoutAccount();
           onSessionChange(null);
@@ -480,12 +572,12 @@ function AuthenticatedApp({ session, onSessionChange }: { session: Session; onSe
       <aside className="side-rail">
         <button className="brand" onClick={() => setTab("home")} aria-label="Vai alla home di GYM & FOOD"><span className="brand-mark"><Dumbbell className="brand-gym-icon" size={22} /><Utensils className="brand-food-icon" size={17} /></span><span className="brand-copy"><strong><b>GYM</b><i>&</i><b>FOOD</b></strong><small>TRAIN · EAT · EVOLVE</small></span></button>
         <nav className="side-nav" aria-label="Navigazione principale"><span className="nav-caption">PERCORSO</span>{NAV.map(({ key, label, icon: Icon }) => <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}><Icon size={20} strokeWidth={2.1} /><span>{label}</span>{key === "coach" && <i className="nav-new">AI</i>}</button>)}</nav>
-        <div className="rail-card"><span className="rail-card-icon"><Sparkles size={17} /></span><strong>Settimana 4</strong><p>La base è solida. Questa settimana consolidiamo tecnica e ritmo.</p><div className="mini-progress"><span style={{ width: "33%" }} /></div><small>4 di 12</small></div>
+        <div className="rail-card"><span className="rail-card-icon"><Sparkles size={17} /></span><strong>{workoutMeta.goalLabel}</strong><p>{workoutMeta.focus}</p><div className="mini-progress"><span style={{ width: `${Math.min(100, (metrics.workoutsCompleted / Math.max(profile.weeklyGoal, 1)) * 100)}%` }} /></div><small>{setupSummary(setup)}</small></div>
         <button className="rail-profile" onClick={() => setProfileOpen(true)}><span className="avatar">{initials(profile.name)}</span><span><strong>{profile.name}</strong><small>{session.email}</small></span><Settings2 size={17} /></button>
       </aside>
       <div className="app-body"><header className="topbar"><div className="topbar-date"><span>{topbarDate.weekday}</span><strong>{topbarDate.label}</strong></div><div className="top-actions"><div className="device-pill demo" title="Demo UI · non collegato"><Watch size={17} /><span>Watch</span><em>demo</em></div><button className="icon-button" aria-label="Cerca" onClick={() => toast("La ricerca globale sarà disponibile nel prossimo aggiornamento")}><Search size={19} /></button><button className="profile-chip" onClick={() => setProfileOpen(true)}><span>{initials(profile.name)}</span></button></div></header><main className="main-surface">{renderView()}</main></div>
       <nav className="mobile-nav" aria-label="Navigazione mobile">{NAV.map(({ key, label, icon: Icon }) => <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}><Icon size={20} /><span>{label === "Alimentazione" ? "Cibo" : label}</span></button>)}</nav>
-      <GuidedWorkout open={workoutOpen} onOpenChange={setWorkoutOpen} voiceEnabled={voiceEnabled} onComplete={() => { markWorkoutComplete(); setWorkoutOpen(false); toast.success("Allenamento completato: 186 kcal stimate"); }} />
+      <GuidedWorkout open={workoutOpen} onOpenChange={setWorkoutOpen} voiceEnabled={voiceEnabled} queue={workoutQueue} onComplete={() => { markWorkoutComplete(); setWorkoutOpen(false); toast.success("Allenamento completato"); }} />
       <ProfileEditor open={profileOpen} onOpenChange={setProfileOpen} profile={profile} setProfile={setProfile} weightData={weightData} setWeightData={setWeightData} />
       <Toaster position="top-center" richColors />
     </div>
@@ -496,34 +588,35 @@ function PageHeading({ eyebrow, title, description, action }: { eyebrow: string;
   return <div className="page-heading"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1>{description && <p>{description}</p>}</div>{action}</div>;
 }
 
-function Dashboard({ profile, steps, setSteps, water, setWater, consumed, target, workoutDone, startWorkout, goTo, todayActivity, streakDays }: { profile: Profile; steps: number; setSteps: (value: number) => void; water: number; setWater: (value: number) => void; consumed: number; target: number; workoutDone: boolean; startWorkout: () => void; goTo: (tab: TabKey) => void; todayActivity: string; streakDays: number }) {
+function Dashboard({ profile, steps, setSteps, water, setWater, consumed, target, workoutDone, startWorkout, goTo, todayActivity, streakDays, workoutMeta, setup }: { profile: Profile; steps: number; setSteps: (value: number) => void; water: number; setWater: (value: number) => void; consumed: number; target: number; workoutDone: boolean; startWorkout: () => void; goTo: (tab: TabKey) => void; todayActivity: string; streakDays: number; workoutMeta: WorkoutMeta; setup: UserSetup }) {
   const dailyProgress = Math.min(100, Math.round(((Number(workoutDone) + Math.min(water / 8, 1) + Math.min(steps / 9000, 1)) / 3) * 100));
-  const isReplaced = !todayActivity.toLowerCase().includes("core");
   return <div className="page-stack">
-    <PageHeading eyebrow="OGGI · GYM & FOOD" title={`Ciao ${profile.name}, continuiamo così.`} description="Il piano di oggi è calibrato sul recupero e sull’obiettivo settimanale." action={<div className="streak"><Flame size={18} /><strong>{streakDays}</strong><span>giorni</span></div>} />
-    <section className="dashboard-hero"><div className="hero-copy"><span className="status-badge"><span /> GYM PLAN · OGGI</span><h2>Allenati. Nutriti. Migliora.</h2><p>{isReplaced ? `Oggi il piano prevede: ${todayActivity}. Puoi comunque aprire la sessione guidata quando vuoi.` : "Core e stabilità con riscaldamento mirato, stretching specifico e nutrizione coordinata al tuo obiettivo."}</p><div className="hero-meta"><span><Clock3 size={16} /> {isReplaced ? "Attività sostituita" : "24 min"}</span><span><Flame size={16} /> 186 kcal</span><span><Utensils size={16} /> Piano cibo attivo</span></div><button className="primary-button inverse" onClick={startWorkout}>{workoutDone ? <><RotateCcw size={18} /> Ripeti allenamento</> : <><Play size={18} fill="currentColor" /> Inizia ora</>}</button></div><div className="hero-score"><div className="score-ring" style={{ "--score": `${dailyProgress * 3.6}deg` } as React.CSSProperties}><span><strong>{dailyProgress}</strong><small>%</small></span></div><p>Equilibrio di oggi</p></div></section>
-    <section className="metric-grid"><MetricCard icon={Footprints} label="Passi" value={steps.toLocaleString("it-IT")} sub="Obiettivo 9.000" progress={(steps / 9000) * 100} tone="blue" action={() => setSteps(Math.min(20000, steps + 500))} /><MetricCard icon={Utensils} label="Calorie" value={`${consumed}`} unit={`/${target} kcal`} sub={`${Math.max(target - consumed, 0)} kcal disponibili`} progress={(consumed / target) * 100} tone="orange" action={() => goTo("nutrition")} /><MetricCard icon={HeartPulse} label="Battito" value="—" unit="bpm" sub="Watch non collegato" progress={0} tone="red" action={() => goTo("progress")} /><MetricCard icon={Activity} label="Acqua" value={`${water}`} unit="/8 bicchieri" sub="Idratazione di oggi" progress={(water / 8) * 100} tone="teal" action={() => setWater(Math.min(8, water + 1))} /></section>
-    <section className="two-column"><article className="surface-card schedule-card"><div className="card-head"><div><span className="card-kicker">IL TUO PERCORSO</span><h3>Settimana 4 di 12</h3></div><button className="text-button" onClick={() => goTo("workouts")}>Programma <ChevronRight size={16} /></button></div><WeekTrack /><div className="week-callout"><Target size={21} /><div><strong>Focus della settimana</strong><p>Controllo del core e qualità del movimento. Aumenta solo se la tecnica resta pulita.</p></div></div></article><article className="surface-card daily-plan"><div className="card-head"><div><span className="card-kicker">CHECK-IN</span><h3>Il tuo ritmo oggi</h3></div><span className="soft-badge">3 obiettivi</span></div><CheckRow done={workoutDone || isReplaced} label={isReplaced ? todayActivity : "Allenamento core"} detail={isReplaced ? "Sostituito" : "24 min"} onClick={startWorkout} /><CheckRow done={water >= 8} label="8 bicchieri d’acqua" detail={`${water}/8`} onClick={() => setWater(Math.min(8, water + 1))} /><CheckRow done={steps >= 9000} label="9.000 passi" detail={steps.toLocaleString("it-IT")} onClick={() => setSteps(Math.min(20000, steps + 500))} /></article></section>
+    <PageHeading eyebrow="OGGI · GYM & FOOD" title={`Ciao ${profile.name}, continuiamo così.`} description={`Piano su misura: ${workoutMeta.goalLabel.toLowerCase()} · ${workoutMeta.dietLabel.toLowerCase()}.`} action={<div className="streak"><Flame size={18} /><strong>{streakDays}</strong><span>giorni</span></div>} />
+    <section className="dashboard-hero"><div className="hero-copy"><span className="status-badge"><span /> PIANO PERSONALE · OGGI</span><h2>{workoutMeta.title}</h2><p>{`Oggi: ${todayActivity}. ${workoutMeta.focus}`}</p><div className="hero-meta"><span><Clock3 size={16} /> {workoutMeta.summary.split("·")[0]?.trim() || "Sessione"}</span><span><Target size={16} /> {workoutMeta.goalLabel}</span><span><Utensils size={16} /> {target} kcal</span></div><button className="primary-button inverse" onClick={startWorkout}>{workoutDone ? <><RotateCcw size={18} /> Ripeti allenamento</> : <><Play size={18} fill="currentColor" /> Inizia ora</>}</button></div><div className="hero-score"><div className="score-ring" style={{ "--score": `${dailyProgress * 3.6}deg` } as React.CSSProperties}><span><strong>{dailyProgress}</strong><small>%</small></span></div><p>Equilibrio di oggi</p></div></section>
+    <section className="metric-grid"><MetricCard icon={Footprints} label="Passi" value={steps.toLocaleString("it-IT")} sub="Obiettivo 9.000" progress={(steps / 9000) * 100} tone="blue" action={() => setSteps(Math.min(20000, steps + 500))} /><MetricCard icon={Utensils} label="Calorie" value={`${consumed}`} unit={`/${target} kcal`} sub={`${Math.max(target - consumed, 0)} kcal disponibili`} progress={(consumed / Math.max(target, 1)) * 100} tone="orange" action={() => goTo("nutrition")} /><MetricCard icon={HeartPulse} label="Battito" value="—" unit="bpm" sub="Watch non collegato" progress={0} tone="red" action={() => goTo("progress")} /><MetricCard icon={Activity} label="Acqua" value={`${water}`} unit="/8 bicchieri" sub="Idratazione di oggi" progress={(water / 8) * 100} tone="teal" action={() => setWater(Math.min(8, water + 1))} /></section>
+    <section className="two-column"><article className="surface-card schedule-card"><div className="card-head"><div><span className="card-kicker">IL TUO PERCORSO</span><h3>{workoutMeta.weekLabel}</h3></div><button className="text-button" onClick={() => goTo("workouts")}>Programma <ChevronRight size={16} /></button></div><WeekTrack weeklyGoal={setup.weeklyGoal} /><div className="week-callout"><Target size={21} /><div><strong>Focus</strong><p>{workoutMeta.focus}</p></div></div></article><article className="surface-card daily-plan"><div className="card-head"><div><span className="card-kicker">CHECK-IN</span><h3>Il tuo ritmo oggi</h3></div><span className="soft-badge">3 obiettivi</span></div><CheckRow done={workoutDone} label={todayActivity} detail="Sessione del piano" onClick={startWorkout} /><CheckRow done={water >= 8} label="8 bicchieri d’acqua" detail={`${water}/8`} onClick={() => setWater(Math.min(8, water + 1))} /><CheckRow done={steps >= 9000} label="9.000 passi" detail={steps.toLocaleString("it-IT")} onClick={() => setSteps(Math.min(20000, steps + 500))} /></article></section>
   </div>;
 }
 
 function MetricCard({ icon: Icon, label, value, unit, sub, progress, tone, action }: { icon: LucideIcon; label: string; value: string; unit?: string; sub: string; progress: number; tone: string; action: () => void }) { return <button className={`metric-card ${tone}`} onClick={action}><span className="metric-icon"><Icon size={20} /></span><div className="metric-copy"><span>{label}</span><strong>{value}<small>{unit}</small></strong><p>{sub}</p></div><Progress value={Math.min(progress, 100)} className="metric-progress" /></button>; }
-function WeekTrack() { return <div className="week-track" aria-label="Progresso del programma di 12 settimane">{Array.from({ length: 12 }, (_, index) => index + 1).map((week) => <div className={week < 4 ? "done" : week === 4 ? "current" : ""} key={week}><span>{week < 4 ? <Check size={12} /> : week}</span>{week === 4 && <small>ORA</small>}</div>)}</div>; }
+function WeekTrack({ weeklyGoal }: { weeklyGoal: number }) { return <div className="week-track" aria-label="Giorni di allenamento settimanali">{Array.from({ length: 7 }, (_, index) => index + 1).map((day) => <div className={day <= weeklyGoal ? "current" : ""} key={day}><span>{day <= weeklyGoal ? <Check size={12} /> : day}</span>{day === 1 && <small>SETT</small>}</div>)}</div>; }
 function CheckRow({ done, label, detail, onClick }: { done: boolean; label: string; detail: string; onClick: () => void }) { return <button className="check-row" onClick={onClick}><span className={done ? "check-circle done" : "check-circle"}>{done && <Check size={15} />}</span><span><strong>{label}</strong><small>{detail}</small></span><ChevronRight size={17} /></button>; }
 
-function Workouts({ startWorkout, workoutDone, todayActivity }: { startWorkout: () => void; workoutDone: boolean; todayActivity: string }) {
+function Workouts({ startWorkout, workoutDone, todayActivity, workoutQueue, workoutMeta }: { startWorkout: () => void; workoutDone: boolean; todayActivity: string; workoutQueue: Exercise[]; workoutMeta: WorkoutMeta }) {
   const [difficulty, setDifficulty] = useState("Bilanciato");
-  const note = difficulty === "Più facile" ? "Riduciamo le tenute a 20 secondi e inseriamo più recupero." : difficulty === "Più intenso" ? "Aggiungiamo una serie a Dead Bug e Bird Dog, mantenendo invariati riscaldamento e stretching." : "Il carico attuale è coerente con il tuo recupero. Dopo la sessione dimmi com’è andata.";
-  const replaced = !todayActivity.toLowerCase().includes("core");
-  return <div className="page-stack"><PageHeading eyebrow="PROGRAMMA" title="Allenamenti che crescono con te" description="Il piano si adatta al feedback, senza sacrificare tecnica, riscaldamento o recupero." action={<button className="primary-button" onClick={startWorkout}><Play size={18} fill="currentColor" /> {workoutDone ? "Ripeti sessione" : "Inizia sessione"}</button>} />
-    <section className="workout-top-grid"><article className="workout-feature"><div className="feature-top"><span className="status-badge light"><span /> ALLENAMENTO DI OGGI</span><span className="soft-badge">{replaced ? "Sostituito" : "Core"}</span></div><h2>{replaced ? todayActivity : "Stabilità addominale"}</h2><p>{replaced ? "Hai sostituito la sessione core di oggi. La sessione guidata resta disponibile." : "24 minuti · 3 fasi · 13 timer effettivi"}</p><div className="phase-line"><div><span className="phase-dot warm" /><strong>Riscaldamento</strong><small>3 esercizi mirati</small></div><div><span className="phase-dot active" /><strong>Allenamento</strong><small>Side plank: 6 timer</small></div><div><span className="phase-dot cool" /><strong>Stretching</strong><small>4 esercizi core</small></div></div><button className="primary-button inverse" onClick={startWorkout}><CirclePlay size={19} /> Apri allenamento guidato</button></article><article className="surface-card adaptive-card"><span className="card-kicker">ADATTAMENTO</span><h3>Intensità consigliata</h3><div className="segment-control">{["Più facile", "Bilanciato", "Più intenso"].map((option) => <button key={option} className={difficulty === option ? "active" : ""} onClick={() => setDifficulty(option)}>{option}</button>)}</div><div className="coach-note"><Sparkles size={19} /><p>{note}</p></div></article></section>
-    <section className="surface-card plan-list-card"><div className="card-head"><div><span className="card-kicker">STRUTTURA COMPLETA</span><h3>Sessione addome e obliqui</h3></div><span className="soft-badge"><TimerReset size={14} /> Riavvio disponibile</span></div><div className="phase-block"><PhaseHeader number="01" title="Riscaldamento" subtitle="Specifico per core, bacino e colonna" color="warm" />{WARMUP.map((exercise) => <ExerciseRow key={exercise.id} exercise={exercise} />)}</div><div className="phase-block"><PhaseHeader number="02" title="Allenamento" subtitle="Tre serie per lato nel Side Plank" color="active" />{MAIN_EXERCISES.map((exercise) => <ExerciseRow key={exercise.id} exercise={exercise} compact />)}</div><div className="phase-block"><PhaseHeader number="03" title="Stretching finale" subtitle="Addome, obliqui, dorsali e respirazione" color="cool" />{COOLDOWN.map((exercise) => <ExerciseRow key={exercise.id} exercise={exercise} />)}</div></section>
+  const note = difficulty === "Più facile" ? "Riduci le tenute e ascolta il recupero: la tecnica resta priorità." : difficulty === "Più intenso" ? "Puoi allungare leggermente le tenute se la forma resta pulita." : "Il carico attuale è calibrato sul tuo obiettivo e sul tuo livello.";
+  const warmup = workoutQueue.filter((item) => item.stage === "Riscaldamento");
+  const main = workoutQueue.filter((item) => item.stage === "Allenamento");
+  const cooldown = workoutQueue.filter((item) => item.stage === "Stretching");
+  return <div className="page-stack"><PageHeading eyebrow="PROGRAMMA" title="Allenamenti sul tuo obiettivo" description={workoutMeta.weekLabel} action={<button className="primary-button" onClick={startWorkout}><Play size={18} fill="currentColor" /> {workoutDone ? "Ripeti sessione" : "Inizia sessione"}</button>} />
+    <section className="workout-top-grid"><article className="workout-feature"><div className="feature-top"><span className="status-badge light"><span /> ALLENAMENTO DI OGGI</span><span className="soft-badge">{workoutMeta.goalLabel}</span></div><h2>{workoutMeta.title}</h2><p>{workoutMeta.summary} · oggi: {todayActivity}</p><div className="phase-line"><div><span className="phase-dot warm" /><strong>Riscaldamento</strong><small>{warmup.length} esercizi</small></div><div><span className="phase-dot active" /><strong>Allenamento</strong><small>{main.length} timer</small></div><div><span className="phase-dot cool" /><strong>Stretching</strong><small>{cooldown.length} esercizi</small></div></div><button className="primary-button inverse" onClick={startWorkout}><CirclePlay size={19} /> Apri allenamento guidato</button></article><article className="surface-card adaptive-card"><span className="card-kicker">ADATTAMENTO</span><h3>Intensità consigliata</h3><div className="segment-control">{["Più facile", "Bilanciato", "Più intenso"].map((option) => <button key={option} className={difficulty === option ? "active" : ""} onClick={() => setDifficulty(option)}>{option}</button>)}</div><div className="coach-note"><Sparkles size={19} /><p>{note}</p></div></article></section>
+    <section className="surface-card plan-list-card"><div className="card-head"><div><span className="card-kicker">STRUTTURA COMPLETA</span><h3>{workoutMeta.title}</h3></div><span className="soft-badge"><TimerReset size={14} /> {workoutQueue.length} esercizi</span></div><div className="phase-block"><PhaseHeader number="01" title="Riscaldamento" subtitle="Attivazione e mobilità" color="warm" />{warmup.map((exercise) => <ExerciseRow key={exercise.id} exercise={exercise} />)}</div><div className="phase-block"><PhaseHeader number="02" title="Allenamento" subtitle={workoutMeta.focus} color="active" />{main.map((exercise) => <ExerciseRow key={exercise.id} exercise={exercise} compact />)}</div><div className="phase-block"><PhaseHeader number="03" title="Stretching finale" subtitle="Recupero e respirazione" color="cool" />{cooldown.map((exercise) => <ExerciseRow key={exercise.id} exercise={exercise} />)}</div></section>
   </div>;
 }
 function PhaseHeader({ number, title, subtitle, color }: { number: string; title: string; subtitle: string; color: string }) { return <div className={`phase-header ${color}`}><span>{number}</span><div><strong>{title}</strong><small>{subtitle}</small></div></div>; }
 function ExerciseRow({ exercise, compact = false }: { exercise: Exercise; compact?: boolean }) { return <div className="exercise-row"><span className="exercise-play"><Play size={14} fill="currentColor" /></span><div><strong>{exercise.name}{exercise.side ? ` · ${exercise.side}` : ""}</strong><small>{exercise.focus}</small></div>{exercise.set && <span className="set-badge">Serie {exercise.set}</span>}<span className="duration"><Clock3 size={14} /> {exercise.seconds}s</span>{!compact && <a href={`https://www.youtube.com/watch?v=${exercise.videoId}`} target="_blank" rel="noreferrer" aria-label={`Apri il video di ${exercise.name}`}><Video size={17} /></a>}</div>; }
 
-function Nutrition({ userId, meals, setMeals, shopping, setShopping, target, macros }: { userId: string; meals: Meal[]; setMeals: (meals: Meal[]) => void; shopping: ShoppingItem[]; setShopping: (items: ShoppingItem[]) => void; target: number; macros: { protein: number; carbs: number; fat: number } }) {
+function Nutrition({ userId, meals, setMeals, shopping, setShopping, target, macros, dietLabel }: { userId: string; meals: Meal[]; setMeals: (meals: Meal[]) => void; shopping: ShoppingItem[]; setShopping: (items: ShoppingItem[]) => void; target: number; macros: { protein: number; carbs: number; fat: number }; dietLabel: string }) {
   const [addMealOpen, setAddMealOpen] = useState(false);
   const [captureOpen, setCaptureOpen] = useState<"photo" | "barcode" | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
@@ -563,7 +656,7 @@ function Nutrition({ userId, meals, setMeals, shopping, setShopping, target, mac
     setBarcodeValue("");
     toast.success("Codice acquisito: alimento aggiunto");
   };
-  return <div className="page-stack nutrition-page"><PageHeading eyebrow="ALIMENTAZIONE" title="Mangia bene, senza complicarti la vita" description="Diario, ricette e spesa lavorano insieme sul tuo obiettivo calorico." action={<button className="primary-button" onClick={() => setAddMealOpen(true)}><Plus size={18} /> Aggiungi alimento</button>} />
+  return <div className="page-stack nutrition-page"><PageHeading eyebrow="ALIMENTAZIONE" title="Mangia bene, senza complicarti la vita" description={`Piano ${dietLabel.toLowerCase()} calibrato su ${target} kcal.`} action={<button className="primary-button" onClick={() => setAddMealOpen(true)}><Plus size={18} /> Aggiungi alimento</button>} />
     <section className="nutrition-hero"><img src="/mediterranean-bowl.jpg" alt="Bowl mediterranea bilanciata con pollo, verdure, avocado, riso e ceci" /><div className="nutrition-overlay"><span className="status-badge light"><Sparkles size={13} /> SCELTA DEL GIORNO</span><h2>Bowl mediterranea proteica</h2><p>Un pasto completo che copre proteine, fibre e carboidrati complessi.</p><button onClick={() => addRecipeToDiary(RECIPES[0])}>Usa nel piano <ArrowRight size={17} /></button></div></section>
     <Tabs defaultValue="today" className="nutrition-tabs"><TabsList className="premium-tabs"><TabsTrigger value="today">Diario</TabsTrigger><TabsTrigger value="recipes">Ricette</TabsTrigger><TabsTrigger value="shopping">Spesa</TabsTrigger></TabsList>
       <TabsContent value="today" className="tab-panel"><section className="macro-layout"><article className="surface-card calories-card"><div className="calorie-ring" style={{ "--score": `${Math.min(totals.calories / target, 1) * 360}deg` } as React.CSSProperties}><span><small>consumate</small><strong>{totals.calories}</strong><em>di {target} kcal</em></span></div><div className="macro-bars"><MacroLine label="Proteine" value={totals.protein} target={macros.protein} color="var(--orange)" /><MacroLine label="Carboidrati" value={totals.carbs} target={macros.carbs} color="#4069d7" /><MacroLine label="Grassi" value={totals.fat} target={macros.fat} color="#1b9c75" /></div></article><article className="surface-card smart-add"><span className="card-kicker">AGGIUNTA RAPIDA</span><h3>Registra quello che mangi</h3><div className="quick-actions"><button type="button" onClick={() => openCapture("photo")}><Camera size={20} /><span><strong>Fotografa il piatto</strong><small>Apre la fotocamera</small></span></button><button type="button" onClick={() => openCapture("barcode")}><Square size={20} /><span><strong>Codice a barre</strong><small>Apre la fotocamera</small></span></button></div></article></section>
@@ -621,9 +714,8 @@ function ProgressAndHealth({ profile, setProfile, weightData, setWeightData, met
 }
 function SummaryCard({ label, value, detail, icon: Icon, tone }: { label: string; value: string; detail: string; icon: LucideIcon; tone: string }) { return <article className={`summary-card ${tone}`}><span><Icon size={20} /></span><small>{label}</small><strong>{value}</strong><p>{detail}</p></article>; }
 
-function Coach({ userId, profile, voiceEnabled, setVoiceEnabled, todayActivity, setTodayActivity, consumed, target, steps, water }: { userId: string; profile: Profile; voiceEnabled: boolean; setVoiceEnabled: (value: boolean) => void; todayActivity: string; setTodayActivity: (value: string) => void; consumed: number; target: number; steps: number; water: number }) {
+function Coach({ userId, profile, voiceEnabled, setVoiceEnabled, todayActivity, setTodayActivity, consumed, target, steps, water, messages, setMessages, setup }: { userId: string; profile: Profile; voiceEnabled: boolean; setVoiceEnabled: (value: boolean) => void; todayActivity: string; setTodayActivity: (value: string) => void; consumed: number; target: number; steps: number; water: number; messages: CoachMessage[]; setMessages: (messages: CoachMessage[]) => void; setup: UserSetup }) {
   const remaining = Math.max(target - consumed, 0);
-  const [messages, setMessages] = useUserState<CoachMessage[]>(userId, "addome-coach", [{ id: "welcome", role: "coach", text: `Ciao ${profile.name}. Oggi hai ${todayActivity}. Come ti senti?` }]);
   const [draft, setDraft] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -631,9 +723,9 @@ function Coach({ userId, profile, voiceEnabled, setVoiceEnabled, todayActivity, 
   }, [messages]);
   const answer = (text: string) => {
     const lower = text.toLowerCase();
-    if (/(ripristin|rimetti|riprend|torna).*core|core di nuovo|annulla (la )?sostitu/.test(lower)) {
-      setTodayActivity("Core · 24 min");
-      return "Ok: ripristino la sessione core di oggi (24 minuti). La rivedi in Oggi e Allenamenti.";
+    if (/(ripristin|rimetti|riprend|torna).*piano|sessione di base|allenamento originale/.test(lower)) {
+      setTodayActivity(setup.goal === "build_muscle" ? "Forza · sessione piano" : setup.goal === "endurance" ? "Resistenza · sessione piano" : "Sessione del piano");
+      return `Ok: torno alla sessione prevista dal tuo piano (${setupSummary(setup)}).`;
     }
     const mentionsReplace = /(annull|sostitu|mettiamo|invece|al posto|cambio|cambiamo|skip|salt)/.test(lower);
     const sportMatch = lower.match(/(beach\s*volley|pallavolo|nuoto|corsa|running|yoga|pilates|calcio|tennis|caminat|camminat|bici|ciclismo|hiit)/);
@@ -672,7 +764,7 @@ function Coach({ userId, profile, voiceEnabled, setVoiceEnabled, todayActivity, 
 }
 function ContextRow({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value: string }) { return <div className="context-row"><span><Icon size={17} /></span><small>{label}</small><strong>{value}</strong></div>; }
 
-function ProfileView({ userId, profile, setProfile, target, voiceEnabled, setVoiceEnabled, openEditor, exportData, email, metrics, workoutDone, mealsLogged, mealsTotal, onLogout, onCloudPush, onCloudPull }: { userId: string; profile: Profile; setProfile: (profile: Profile) => void; target: number; voiceEnabled: boolean; setVoiceEnabled: (value: boolean) => void; openEditor: () => void; exportData: () => void; email: string; metrics: ProgressMetrics; workoutDone: boolean; mealsLogged: number; mealsTotal: number; onLogout: () => void | Promise<void>; onCloudPush: () => void; onCloudPull: () => void }) {
+function ProfileView({ userId, profile, setProfile, target, voiceEnabled, setVoiceEnabled, openEditor, exportData, email, metrics, workoutDone, mealsLogged, mealsTotal, setup, onReconfigure, onLogout, onCloudPush, onCloudPull }: { userId: string; profile: Profile; setProfile: (profile: Profile) => void; target: number; voiceEnabled: boolean; setVoiceEnabled: (value: boolean) => void; openEditor: () => void; exportData: () => void; email: string; metrics: ProgressMetrics; workoutDone: boolean; mealsLogged: number; mealsTotal: number; setup: UserSetup; onReconfigure: () => void; onLogout: () => void | Promise<void>; onCloudPush: () => void; onCloudPull: () => void }) {
   const currentBmi = bmi(profile);
   const [autoAdapt, setAutoAdapt] = useUserState(userId, "addome-auto-adapt", true);
   const [notifyWorkout, setNotifyWorkout] = useUserState(userId, "addome-notify-workout", true);
@@ -710,18 +802,21 @@ function ProfileView({ userId, profile, setProfile, target, voiceEnabled, setVoi
       toast("Permesso notifiche non concesso");
     }
   };
-  return <div className="page-stack"><PageHeading eyebrow="PROFILO" title="Il tuo percorso, alle tue condizioni" description="Obiettivi, preferenze e dati personali in un unico posto." action={<button className="secondary-button" onClick={openEditor}><Settings2 size={17} /> Modifica profilo</button>} /><section className="profile-banner"><span className="profile-avatar-large">{initials(profile.name)}</span><div><h2>{profile.name}</h2><p>{email}</p><div><span><Flame size={15} /> {metrics.streakDays} giorni</span><span><Star size={15} /> {Math.round(metrics.workoutsCompleted * 120)} XP</span><span><Dumbbell size={15} /> {metrics.workoutsCompleted} workout</span></div></div><span className="premium-pill"><Sparkles size={15} /> LOCALE</span></section><section className="summary-grid"><SummaryCard label="Obiettivo peso" value={`${profile.goalWeight} kg`} detail={`${(profile.weight - profile.goalWeight).toFixed(1)} kg rimanenti`} icon={Target} tone="orange" /><SummaryCard label="BMI attuale" value={currentBmi.toFixed(1)} detail={currentBmi < 25 ? "Intervallo nella norma" : "Da leggere con il contesto"} icon={Activity} tone="blue" /><SummaryCard label="Obiettivo calorie" value={`${target} kcal`} detail="Deficit moderato stimato" icon={Flame} tone="orange" /><SummaryCard label="Allenamenti" value={`${profile.weeklyGoal}/sett.`} detail={`${metrics.workoutsCompleted} completati in totale`} icon={Dumbbell} tone="green" /></section><section className="settings-layout"><article className="surface-card settings-card"><div className="card-head"><div><span className="card-kicker">PREFERENZE</span><h3>Esperienza</h3></div></div><SettingRow icon={Volume2} label="Guida vocale" detail="Istruzioni durante gli esercizi" control={<Switch checked={voiceEnabled} onCheckedChange={setVoiceEnabled} />} /><SettingRow icon={Watch} label="Dati Apple Watch" detail="Demo UI · non collegato" control={<span className="sync-badge"><span /> Demo</span>} /><SettingRow icon={Sparkles} label="Adattamento automatico" detail="Serie ed esercizi seguono il feedback" control={<Switch checked={autoAdapt} onCheckedChange={setAutoAdapt} />} /></article><article className="surface-card settings-card"><div className="card-head"><div><span className="card-kicker">NOTIFICHE</span><h3>Promemoria</h3></div></div><SettingRow icon={Bell} label="Allenamento" detail="Dopo le 17 se non hai fatto la sessione" control={<Switch checked={notifyWorkout} onCheckedChange={setNotifyWorkout} />} /><SettingRow icon={Utensils} label="Pasti" detail="Promemoria diario a metà giornata" control={<Switch checked={notifyMeals} onCheckedChange={setNotifyMeals} />} /><SettingRow icon={MessageCircle} label="Coach" detail="Check-in serale" control={<Switch checked={notifyCoach} onCheckedChange={setNotifyCoach} />} /><SettingRow icon={BarChart3} label="Revisione settimanale" detail="Promemoria la domenica" control={<Switch checked={notifyWeekly} onCheckedChange={setNotifyWeekly} />} /><button className="settings-action" onClick={() => void requestPushPermission()}><Bell size={18} /><span><strong>Attiva notifiche dispositivo</strong><small>Funzionano con l’app aperta / in PWA</small></span><ChevronRight size={17} /></button></article><article className="surface-card settings-card"><div className="card-head"><div><span className="card-kicker">I TUOI DATI</span><h3>Backup, cloud e account</h3></div></div><button className="settings-action" onClick={exportData}><Download size={18} /><span><strong>Esporta backup</strong><small>Scarica profilo e progressi in JSON</small></span><ChevronRight size={17} /></button><label className="settings-action"><Upload size={18} /><span><strong>Importa backup</strong><small>Ripristina dati da un file</small></span><ChevronRight size={17} /><input type="file" accept="application/json" hidden onChange={(event) => importBackup(event, setProfile)} /></label><button className="settings-action" onClick={onCloudPush}><RefreshCw size={18} /><span><strong>Carica sul cloud</strong><small>Sincronizza via API /api/sync</small></span><ChevronRight size={17} /></button><button className="settings-action" onClick={onCloudPull}><Download size={18} /><span><strong>Scarica dal cloud</strong><small>Ripristina l’ultimo sync remoto</small></span><ChevronRight size={17} /></button><button className="settings-action danger" onClick={() => void onLogout()}><Trash2 size={18} /><span><strong>Esci dall’account</strong><small>I dati restano salvati su questo dispositivo</small></span><ChevronRight size={17} /></button></article></section></div>;
+  return <div className="page-stack"><PageHeading eyebrow="PROFILO" title="Il tuo percorso, alle tue condizioni" description="Obiettivi, preferenze e dati personali in un unico posto." action={<div className="profile-actions"><button className="secondary-button" onClick={openEditor}><Settings2 size={17} /> Modifica profilo</button><button className="primary-button" onClick={onReconfigure}><Sparkles size={17} /> Riconfigura piano</button></div>} /><section className="profile-banner"><span className="profile-avatar-large">{initials(profile.name)}</span><div><h2>{profile.name}</h2><p>{email}</p><div><span><Flame size={15} /> {metrics.streakDays} giorni</span><span><Star size={15} /> {Math.round(metrics.workoutsCompleted * 120)} XP</span><span><Dumbbell size={15} /> {metrics.workoutsCompleted} workout</span></div></div><span className="premium-pill"><Sparkles size={15} /> {setupSummary(setup)}</span></section><section className="summary-grid"><SummaryCard label="Obiettivo peso" value={`${profile.goalWeight} kg`} detail={`${(profile.weight - profile.goalWeight).toFixed(1)} kg rimanenti`} icon={Target} tone="orange" /><SummaryCard label="BMI attuale" value={currentBmi.toFixed(1)} detail={currentBmi < 25 ? "Intervallo nella norma" : "Da leggere con il contesto"} icon={Activity} tone="blue" /><SummaryCard label="Obiettivo calorie" value={`${target} kcal`} detail="Deficit moderato stimato" icon={Flame} tone="orange" /><SummaryCard label="Allenamenti" value={`${profile.weeklyGoal}/sett.`} detail={`${metrics.workoutsCompleted} completati in totale`} icon={Dumbbell} tone="green" /></section><section className="settings-layout"><article className="surface-card settings-card"><div className="card-head"><div><span className="card-kicker">PREFERENZE</span><h3>Esperienza</h3></div></div><SettingRow icon={Volume2} label="Guida vocale" detail="Istruzioni durante gli esercizi" control={<Switch checked={voiceEnabled} onCheckedChange={setVoiceEnabled} />} /><SettingRow icon={Watch} label="Dati Apple Watch" detail="Demo UI · non collegato" control={<span className="sync-badge"><span /> Demo</span>} /><SettingRow icon={Sparkles} label="Adattamento automatico" detail="Serie ed esercizi seguono il feedback" control={<Switch checked={autoAdapt} onCheckedChange={setAutoAdapt} />} /></article><article className="surface-card settings-card"><div className="card-head"><div><span className="card-kicker">NOTIFICHE</span><h3>Promemoria</h3></div></div><SettingRow icon={Bell} label="Allenamento" detail="Dopo le 17 se non hai fatto la sessione" control={<Switch checked={notifyWorkout} onCheckedChange={setNotifyWorkout} />} /><SettingRow icon={Utensils} label="Pasti" detail="Promemoria diario a metà giornata" control={<Switch checked={notifyMeals} onCheckedChange={setNotifyMeals} />} /><SettingRow icon={MessageCircle} label="Coach" detail="Check-in serale" control={<Switch checked={notifyCoach} onCheckedChange={setNotifyCoach} />} /><SettingRow icon={BarChart3} label="Revisione settimanale" detail="Promemoria la domenica" control={<Switch checked={notifyWeekly} onCheckedChange={setNotifyWeekly} />} /><button className="settings-action" onClick={() => void requestPushPermission()}><Bell size={18} /><span><strong>Attiva notifiche dispositivo</strong><small>Funzionano con l’app aperta / in PWA</small></span><ChevronRight size={17} /></button></article><article className="surface-card settings-card"><div className="card-head"><div><span className="card-kicker">I TUOI DATI</span><h3>Backup, cloud e account</h3></div></div><button className="settings-action" onClick={exportData}><Download size={18} /><span><strong>Esporta backup</strong><small>Scarica profilo e progressi in JSON</small></span><ChevronRight size={17} /></button><label className="settings-action"><Upload size={18} /><span><strong>Importa backup</strong><small>Ripristina dati da un file</small></span><ChevronRight size={17} /><input type="file" accept="application/json" hidden onChange={(event) => importBackup(event, setProfile)} /></label><button className="settings-action" onClick={onCloudPush}><RefreshCw size={18} /><span><strong>Carica sul cloud</strong><small>Sincronizza via API /api/sync</small></span><ChevronRight size={17} /></button><button className="settings-action" onClick={onCloudPull}><Download size={18} /><span><strong>Scarica dal cloud</strong><small>Ripristina l’ultimo sync remoto</small></span><ChevronRight size={17} /></button><button className="settings-action danger" onClick={() => void onLogout()}><Trash2 size={18} /><span><strong>Esci dall’account</strong><small>I dati restano salvati su questo dispositivo</small></span><ChevronRight size={17} /></button></article></section></div>;
 }
 function SettingRow({ icon: Icon, label, detail, control }: { icon: LucideIcon; label: string; detail: string; control: React.ReactNode }) { return <div className="setting-row"><span><Icon size={18} /></span><div><strong>{label}</strong><small>{detail}</small></div>{control}</div>; }
 
-function GuidedWorkout({ open, onOpenChange, voiceEnabled, onComplete }: { open: boolean; onOpenChange: (open: boolean) => void; voiceEnabled: boolean; onComplete: () => void }) {
-  const [index, setIndex] = useState(0); const [seconds, setSeconds] = useState(WORKOUT_QUEUE[0].seconds); const [running, setRunning] = useState(false); const [videoOpen, setVideoOpen] = useState(false); const [finished, setFinished] = useState(false); const [feedback, setFeedback] = useState(""); const exercise = WORKOUT_QUEUE[index];
+function GuidedWorkout({ open, onOpenChange, voiceEnabled, onComplete, queue }: { open: boolean; onOpenChange: (open: boolean) => void; voiceEnabled: boolean; onComplete: () => void; queue: Exercise[] }) {
+  const safeQueue = queue.length ? queue : WORKOUT_QUEUE;
+  const [index, setIndex] = useState(0); const [seconds, setSeconds] = useState(safeQueue[0]?.seconds ?? 30); const [running, setRunning] = useState(false); const [videoOpen, setVideoOpen] = useState(false); const [finished, setFinished] = useState(false); const [feedback, setFeedback] = useState(""); const exercise = safeQueue[index] ?? safeQueue[0];
+  useEffect(() => { if (open) { setIndex(0); setSeconds(safeQueue[0]?.seconds ?? 30); setRunning(false); setFinished(false); setFeedback(""); } }, [open, safeQueue]);
   const speak = (message: string) => { if (!voiceEnabled || !("speechSynthesis" in window)) return; window.speechSynthesis.cancel(); const utterance = new SpeechSynthesisUtterance(message); utterance.lang = "it-IT"; utterance.rate = 0.98; window.speechSynthesis.speak(utterance); };
-  const moveTo = (next: number) => { if (next >= WORKOUT_QUEUE.length) { setRunning(false); setFinished(true); speak("Allenamento completato. Ottimo lavoro."); return; } const safe = Math.max(0, next); setIndex(safe); setSeconds(WORKOUT_QUEUE[safe].seconds); setVideoOpen(false); speak(`${WORKOUT_QUEUE[safe].stage}. ${WORKOUT_QUEUE[safe].name}. ${WORKOUT_QUEUE[safe].side ?? ""}. ${WORKOUT_QUEUE[safe].cue}`); };
+  const moveTo = (next: number) => { if (next >= safeQueue.length) { setRunning(false); setFinished(true); speak("Allenamento completato. Ottimo lavoro."); return; } const safe = Math.max(0, next); setIndex(safe); setSeconds(safeQueue[safe].seconds); setVideoOpen(false); speak(`${safeQueue[safe].stage}. ${safeQueue[safe].name}. ${safeQueue[safe].side ?? ""}. ${safeQueue[safe].cue}`); };
   useEffect(() => { if (!running || finished) return; const timer = window.setInterval(() => { setSeconds((current) => { if (current <= 1) { window.clearInterval(timer); window.setTimeout(() => moveTo(index + 1), 250); return 0; } if (current === 4) speak("Tre, due, uno"); return current - 1; }); }, 1000); return () => window.clearInterval(timer); }, [running, index, finished]);
   useEffect(() => { if (!open) { setRunning(false); if ("speechSynthesis" in window) window.speechSynthesis.cancel(); } }, [open]);
-  const resetAll = () => { setIndex(0); setSeconds(WORKOUT_QUEUE[0].seconds); setRunning(false); setFinished(false); setFeedback(""); };
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="workout-dialog" showCloseButton={false}>{!finished ? <><div className="workout-dialog-head"><div><span className={`stage-pill ${exercise.stage.toLowerCase()}`}>{exercise.stage}</span><small>{index + 1} di {WORKOUT_QUEUE.length}</small></div><button onClick={() => onOpenChange(false)} aria-label="Chiudi allenamento"><X size={20} /></button></div><Progress value={((index + 1) / WORKOUT_QUEUE.length) * 100} className="workout-progress" /><div className="workout-focus"><span className="exercise-count">{exercise.set ? `SERIE ${exercise.set}` : exercise.stage === "Riscaldamento" ? "PREPARAZIONE" : "RECUPERO"}</span><h2>{exercise.name}</h2>{exercise.side && <span className="side-label">Lato {exercise.side}</span>}<p>{exercise.focus}</p></div><div className="timer-ring" style={{ "--score": `${(seconds / exercise.seconds) * 360}deg` } as React.CSSProperties}><span><strong>{formatTimer(seconds)}</strong><small>{running ? "IN CORSO" : "IN PAUSA"}</small></span></div><div className="cue-card"><Sparkles size={18} /><p>{exercise.cue}</p></div><div className="workout-controls"><button className="round-button secondary" onClick={() => moveTo(index - 1)} disabled={index === 0}><ArrowLeft size={21} /></button><button className="round-button secondary" onClick={() => { setSeconds(exercise.seconds); setRunning(false); speak(`Ripartiamo da capo. ${exercise.name}`); }} title="Ricomincia esercizio"><RotateCcw size={21} /></button><button className="round-button main" onClick={() => { setRunning(!running); if (!running) speak(`${exercise.name}. ${exercise.cue}`); }}>{running ? <Pause size={25} fill="currentColor" /> : <Play size={25} fill="currentColor" />}</button><button className="round-button secondary" onClick={() => setVideoOpen(true)} title="Video dimostrativo"><Video size={21} /></button><button className="round-button secondary" onClick={() => moveTo(index + 1)}><ArrowRight size={21} /></button></div><div className="workout-foot"><button onClick={() => { setSeconds(exercise.seconds); setRunning(true); }}><TimerReset size={17} /> Fatto male? Riparti dall’inizio</button><span>{exercise.stage === "Allenamento" && exercise.name === "Side Plank" ? "6 timer: 3 per lato" : "Video abbinato all’esercizio"}</span></div>{videoOpen && <DraggableVideo exercise={exercise} onClose={() => setVideoOpen(false)} />}</> : <div className="workout-complete"><span className="complete-icon"><Check size={34} /></span><span className="eyebrow">SESSIONE COMPLETATA</span><h2>Ottimo lavoro.</h2><p>Hai concluso riscaldamento, allenamento e stretching. Stima: 186 kcal.</p><div className="completion-stats"><div><strong>24</strong><small>minuti</small></div><div><strong>13</strong><small>timer</small></div><div><strong>137</strong><small>bpm medi</small></div></div><div className="feedback-box"><strong>Com’è stata l’intensità?</strong><div>{["Troppo facile", "Giusta", "Troppo intensa"].map((option) => <button className={feedback === option ? "active" : ""} key={option} onClick={() => setFeedback(option)}>{option}</button>)}</div>{feedback && <p>{feedback === "Troppo facile" ? "La prossima volta aggiungeremo una serie a Dead Bug e Bird Dog." : feedback === "Troppo intensa" ? "La prossima volta ridurremo le tenute e proporremo una variante più semplice." : "Manteniamo questo equilibrio e progrediamo gradualmente."}</p>}</div><button className="primary-button full" onClick={onComplete}>Salva e chiudi</button><button className="text-button center" onClick={resetAll}><RotateCcw size={16} /> Ripeti da capo</button></div>}</DialogContent></Dialog>;
+  const resetAll = () => { setIndex(0); setSeconds(safeQueue[0]?.seconds ?? 30); setRunning(false); setFinished(false); setFeedback(""); };
+  if (!exercise) return null;
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="workout-dialog" showCloseButton={false}>{!finished ? <><div className="workout-dialog-head"><div><span className={`stage-pill ${exercise.stage.toLowerCase()}`}>{exercise.stage}</span><small>{index + 1} di {safeQueue.length}</small></div><button onClick={() => onOpenChange(false)} aria-label="Chiudi allenamento"><X size={20} /></button></div><Progress value={((index + 1) / safeQueue.length) * 100} className="workout-progress" /><div className="workout-focus"><span className="exercise-count">{exercise.set ? `SERIE ${exercise.set}` : exercise.stage === "Riscaldamento" ? "PREPARAZIONE" : "RECUPERO"}</span><h2>{exercise.name}</h2>{exercise.side && <span className="side-label">Lato {exercise.side}</span>}<p>{exercise.focus}</p></div><div className="timer-ring" style={{ "--score": `${(seconds / exercise.seconds) * 360}deg` } as React.CSSProperties}><span><strong>{formatTimer(seconds)}</strong><small>{running ? "IN CORSO" : "IN PAUSA"}</small></span></div><div className="cue-card"><Sparkles size={18} /><p>{exercise.cue}</p></div><div className="workout-controls"><button className="round-button secondary" onClick={() => moveTo(index - 1)} disabled={index === 0}><ArrowLeft size={21} /></button><button className="round-button secondary" onClick={() => { setSeconds(exercise.seconds); setRunning(false); speak(`Ripartiamo da capo. ${exercise.name}`); }} title="Ricomincia esercizio"><RotateCcw size={21} /></button><button className="round-button main" onClick={() => { setRunning(!running); if (!running) speak(`${exercise.name}. ${exercise.cue}`); }}>{running ? <Pause size={25} fill="currentColor" /> : <Play size={25} fill="currentColor" />}</button><button className="round-button secondary" onClick={() => setVideoOpen(true)} title="Video dimostrativo"><Video size={21} /></button><button className="round-button secondary" onClick={() => moveTo(index + 1)}><ArrowRight size={21} /></button></div><div className="workout-foot"><button onClick={() => { setSeconds(exercise.seconds); setRunning(true); }}><TimerReset size={17} /> Fatto male? Riparti dall’inizio</button><span>{exercise.stage === "Allenamento" && exercise.name === "Side Plank" ? "6 timer: 3 per lato" : "Video abbinato all’esercizio"}</span></div>{videoOpen && <DraggableVideo exercise={exercise} onClose={() => setVideoOpen(false)} />}</> : <div className="workout-complete"><span className="complete-icon"><Check size={34} /></span><span className="eyebrow">SESSIONE COMPLETATA</span><h2>Ottimo lavoro.</h2><p>Hai concluso riscaldamento, allenamento e stretching. Stima: 186 kcal.</p><div className="completion-stats"><div><strong>24</strong><small>minuti</small></div><div><strong>13</strong><small>timer</small></div><div><strong>137</strong><small>bpm medi</small></div></div><div className="feedback-box"><strong>Com’è stata l’intensità?</strong><div>{["Troppo facile", "Giusta", "Troppo intensa"].map((option) => <button className={feedback === option ? "active" : ""} key={option} onClick={() => setFeedback(option)}>{option}</button>)}</div>{feedback && <p>{feedback === "Troppo facile" ? "La prossima volta aggiungeremo una serie a Dead Bug e Bird Dog." : feedback === "Troppo intensa" ? "La prossima volta ridurremo le tenute e proporremo una variante più semplice." : "Manteniamo questo equilibrio e progrediamo gradualmente."}</p>}</div><button className="primary-button full" onClick={onComplete}>Salva e chiudi</button><button className="text-button center" onClick={resetAll}><RotateCcw size={16} /> Ripeti da capo</button></div>}</DialogContent></Dialog>;
 }
 
 function DraggableVideo({ exercise, onClose }: { exercise: Exercise; onClose: () => void }) {
