@@ -72,7 +72,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .app-shell { min-height: 100vh; background: radial-gradient(circle at 88% 7%, rgba(20, 108, 82, .08), transparent 24%), radial-gradient(circle at 16% 36%, rgba(255, 92, 53, .06), transparent 22%), var(--cream); }
 .side-rail { position: fixed; inset: 0 auto 0 0; z-index: 30; width: 248px; display: flex; flex-direction: column; padding: 28px 18px 20px; background: rgba(255, 253, 249, .96); border-right: 1px solid var(--border); backdrop-filter: blur(20px); }
 .brand { display: flex; align-items: center; gap: 11px; padding: 0 8px 26px; border: 0; background: transparent; cursor: pointer; text-align: left; }
-.brand-mark { position: relative; width: 44px; height: 44px; display: grid; place-items: center; border-radius: 15px; color: white; background: linear-gradient(145deg, var(--orange), #f97845); box-shadow: 0 10px 25px rgba(255, 92, 53, .24); }
+.brand-mark { position: relative; width: 44px; height: 44px; display: grid; place-items: center; border-radius: 15px; color: white; background: transparent; box-shadow: 0 10px 25px rgba(255, 92, 53, .24); overflow: hidden; }
+.brand-mark-img { width: 100%; height: 100%; display: block; object-fit: cover; }
 .brand-food-icon { position: absolute; right: -4px; bottom: -4px; width: 21px; height: 21px; padding: 4px; border: 2px solid var(--white); border-radius: 8px; color: white; background: var(--green); }
 .brand-copy { display: grid; line-height: 1; }
 .brand strong { display: flex; align-items: center; gap: 4px; font-size: 18px; letter-spacing: -.04em; }

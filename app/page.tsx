@@ -290,7 +290,7 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (session: Session) =
     <div className="auth-shell">
       <div className="auth-card">
         <div className="auth-brand">
-          <span className="brand-mark"><Dumbbell className="brand-gym-icon" size={22} /><Utensils className="brand-food-icon" size={17} /></span>
+          <span className="brand-mark"><img src="/favicon.svg" alt="" className="brand-mark-img" width={44} height={44} /></span>
           <strong><b>GYM</b><i>&</i><b>FOOD</b></strong>
           <p>Allenati. Nutriti. Migliora — con account reale e dati nel tuo dispositivo.</p>
         </div>
@@ -570,7 +570,7 @@ function AuthenticatedApp({ session, onSessionChange }: { session: Session; onSe
   return (
     <div className="app-shell">
       <aside className="side-rail">
-        <button className="brand" onClick={() => setTab("home")} aria-label="Vai alla home di GYM & FOOD"><span className="brand-mark"><Dumbbell className="brand-gym-icon" size={22} /><Utensils className="brand-food-icon" size={17} /></span><span className="brand-copy"><strong><b>GYM</b><i>&</i><b>FOOD</b></strong><small>TRAIN · EAT · EVOLVE</small></span></button>
+        <button className="brand" onClick={() => setTab("home")} aria-label="Vai alla home di GYM & FOOD"><span className="brand-mark"><img src="/favicon.svg" alt="" className="brand-mark-img" width={44} height={44} /></span><span className="brand-copy"><strong><b>GYM</b><i>&</i><b>FOOD</b></strong><small>TRAIN · EAT · EVOLVE</small></span></button>
         <nav className="side-nav" aria-label="Navigazione principale"><span className="nav-caption">PERCORSO</span>{NAV.map(({ key, label, icon: Icon }) => <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}><Icon size={20} strokeWidth={2.1} /><span>{label}</span>{key === "coach" && <i className="nav-new">AI</i>}</button>)}</nav>
         <div className="rail-card"><span className="rail-card-icon"><Sparkles size={17} /></span><strong>{workoutMeta.goalLabel}</strong><p>{workoutMeta.focus}</p><div className="mini-progress"><span style={{ width: `${Math.min(100, (metrics.workoutsCompleted / Math.max(profile.weeklyGoal, 1)) * 100)}%` }} /></div><small>{setupSummary(setup)}</small></div>
         <button className="rail-profile" onClick={() => setProfileOpen(true)}><span className="avatar">{initials(profile.name)}</span><span><strong>{profile.name}</strong><small>{session.email}</small></span><Settings2 size={17} /></button>

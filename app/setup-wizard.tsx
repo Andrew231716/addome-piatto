@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ArrowLeft, ArrowRight, Check, Dumbbell, Sparkles, Target, Utensils } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, Sparkles, Target } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -48,7 +48,7 @@ export function SetupWizard({ initialName = "", initial, onComplete, onCancel }:
     <div className="auth-shell setup-shell">
       <div className="auth-card setup-card">
         <div className="auth-brand">
-          <span className="brand-mark"><Dumbbell className="brand-gym-icon" size={22} /><Utensils className="brand-food-icon" size={17} /></span>
+          <span className="brand-mark"><img src="/favicon.svg" alt="" className="brand-mark-img" width={44} height={44} /></span>
           <strong><b>GYM</b><i>&</i><b>FOOD</b></strong>
           <p>Configura allenamenti e alimentazione sul tuo obiettivo reale.</p>
         </div>
