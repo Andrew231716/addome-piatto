@@ -170,6 +170,24 @@ export async function logoutAccount(): Promise<void> {
   await idbDelete("sessions", SESSION_KEY);
 }
 
+/** Removes an account from this device (IndexedDB + mirror) and clears the session. */
+export async function deleteAccount(accountId: string): Promise<void> {
+  await idbDelete("accounts", accountId);
+  writeAccountsMirror(readAccountsMirror().filter((item) => item.id !== accountId));
+
+  const userRows = await idbGetAll<{ key: string }>("userData");
+  await Promise.all(
+    userRows
+      .filter((row) => row.key.startsWith(`${accountId}:`))
+      .map((row) => idbDelete("userData", row.key)),
+  );
+
+  const session = await getSession();
+  if (session?.accountId === accountId) {
+    await logoutAccount();
+  }
+}
+
 export async function updateAccountName(accountId: string, name: string): Promise<Session | null> {
   const account =
     (await idbGet<Account>("accounts", accountId)) ??

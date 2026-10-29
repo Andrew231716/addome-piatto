@@ -357,6 +357,21 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .auth-brand strong i { margin: 0 4px; color: var(--orange); font-style: normal; }
 .auth-brand p { margin: 0; color: var(--muted-text); font-size: 14px; }
 .auth-toggle { width: 100%; }
+.auth-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  margin: -4px 0 0;
+  padding: 6px 2px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 750;
+  cursor: pointer;
+}
+.auth-back:hover { color: var(--orange); }
 .auth-error { margin: 0; color: #c84245; font-size: 12px; font-weight: 700; }
 .auth-note { margin: 0; color: var(--muted-text); font-size: 11px; line-height: 1.5; }
 

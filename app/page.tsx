@@ -18,6 +18,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  deleteAccount,
   getSession,
   loginAccount,
   logoutAccount,
@@ -286,17 +287,33 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (session: Session) =
     }
   };
 
+  const goToLogin = () => {
+    setMode("login");
+    setError("");
+  };
+
   return (
     <div className="auth-shell">
       <div className="auth-card">
+        {mode === "register" && (
+          <button
+            type="button"
+            className="auth-back"
+            onClick={goToLogin}
+            aria-label="Torna ad Accedi"
+          >
+            <ArrowLeft size={18} />
+            <span>Accedi</span>
+          </button>
+        )}
         <div className="auth-brand">
           <span className="brand-mark"><img src="/favicon.svg" alt="" className="brand-mark-img" width={44} height={44} /></span>
           <strong><b>GYM</b><i>&</i><b>FOOD</b></strong>
           <p>Allenati. Nutriti. Migliora — con account reale e dati nel tuo dispositivo.</p>
         </div>
         <div className="segment-control auth-toggle">
-          <button className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>Accedi</button>
-          <button className={mode === "register" ? "active" : ""} onClick={() => setMode("register")}>Crea account</button>
+          <button className={mode === "login" ? "active" : ""} onClick={goToLogin}>Accedi</button>
+          <button className={mode === "register" ? "active" : ""} onClick={() => { setMode("register"); setError(""); }}>Crea account</button>
         </div>
         <div className="form-stack">
           {mode === "register" && (
@@ -528,7 +545,16 @@ function AuthenticatedApp({ session, onSessionChange }: { session: Session; onSe
           initialName={session.name}
           initial={setup}
           onComplete={applySetup}
-          onCancel={setupReady ? () => setSetupOpen(false) : undefined}
+          cancelLabel={setupReady ? "Chiudi" : "Accedi"}
+          onCancel={
+            setupReady
+              ? () => setSetupOpen(false)
+              : async () => {
+                  await deleteAccount(session.accountId);
+                  onSessionChange(null);
+                  toast("Creazione account annullata");
+                }
+          }
         />
         <Toaster position="top-center" richColors />
       </>

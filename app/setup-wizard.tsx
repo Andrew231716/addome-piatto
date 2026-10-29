@@ -20,12 +20,13 @@ type Props = {
   initialName?: string;
   initial?: UserSetup | null;
   onComplete: (setup: UserSetup) => void;
-  onCancel?: () => void;
+  onCancel?: () => void | Promise<void>;
+  cancelLabel?: string;
 };
 
 const STEPS = ["Dati", "Obiettivo", "Abitudini", "Piano"] as const;
 
-export function SetupWizard({ initialName = "", initial, onComplete, onCancel }: Props) {
+export function SetupWizard({ initialName = "", initial, onComplete, onCancel, cancelLabel = "Annulla" }: Props) {
   const [step, setStep] = useState(0);
   const [setup, setSetup] = useState<UserSetup>({
     ...DEFAULT_SETUP,
@@ -47,6 +48,17 @@ export function SetupWizard({ initialName = "", initial, onComplete, onCancel }:
   return (
     <div className="auth-shell setup-shell">
       <div className="auth-card setup-card">
+        {onCancel && step === 0 && (
+          <button
+            type="button"
+            className="auth-back"
+            onClick={() => void onCancel()}
+            aria-label={cancelLabel}
+          >
+            <ArrowLeft size={18} />
+            <span>{cancelLabel}</span>
+          </button>
+        )}
         <div className="auth-brand">
           <span className="brand-mark"><img src="/favicon.svg" alt="" className="brand-mark-img" width={44} height={44} /></span>
           <strong><b>GYM</b><i>&</i><b>FOOD</b></strong>
@@ -189,7 +201,7 @@ export function SetupWizard({ initialName = "", initial, onComplete, onCancel }:
           {step > 0 ? (
             <button type="button" className="secondary-button" onClick={() => setStep(step - 1)}><ArrowLeft size={17} /> Indietro</button>
           ) : onCancel ? (
-            <button type="button" className="secondary-button" onClick={onCancel}>Annulla</button>
+            <button type="button" className="secondary-button" onClick={() => void onCancel()}><ArrowLeft size={17} /> {cancelLabel}</button>
           ) : <span />}
           {step < STEPS.length - 1 ? (
             <button type="button" className="primary-button" disabled={!canNext} onClick={() => setStep(step + 1)}>
