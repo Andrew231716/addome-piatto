@@ -25,6 +25,8 @@ export type Exercise = {
   videoId: string;
   side?: "Sinistra" | "Destra";
   set?: number;
+  /** Rest / transition block between work intervals. */
+  isRest?: boolean;
 };
 
 export type Meal = {
@@ -259,6 +261,116 @@ function setsFor(experience: Experience, goal: GoalType) {
   return 3;
 }
 
+function restSecondsFor(experience: Experience, goal: GoalType, kind: "short" | "set" | "exercise" | "stage") {
+  const base =
+    kind === "short" ? 12 :
+    kind === "set" ? 28 :
+    kind === "exercise" ? 35 :
+    22;
+  if (experience === "beginner") return base + 6;
+  if (experience === "advanced" || goal === "endurance") return Math.max(10, base - 6);
+  if (goal === "build_muscle") return base + 4;
+  return base;
+}
+
+function restBlock(
+  id: string,
+  seconds: number,
+  stage: WorkoutStage,
+  label: string,
+  cue: string,
+  videoId = "v0Yj9HjgR64",
+): Exercise {
+  return {
+    id,
+    name: label,
+    focus: "Recupero attivo",
+    seconds,
+    stage,
+    cue,
+    videoId,
+    isRest: true,
+  };
+}
+
+/** Insert rests between work intervals (idempotent if rests already present). */
+export function expandQueueWithRests(
+  queue: Exercise[],
+  opts: { experience?: Experience; goal?: GoalType } = {},
+): Exercise[] {
+  if (!queue.length) return queue;
+  if (queue.some((item) => item.isRest)) return queue;
+
+  const experience = opts.experience ?? "beginner";
+  const goal = opts.goal ?? "recomp";
+  const out: Exercise[] = [];
+
+  for (let i = 0; i < queue.length; i += 1) {
+    const curr = queue[i];
+    out.push(curr);
+    const next = queue[i + 1];
+    if (!next) continue;
+
+    if (curr.stage !== next.stage) {
+      out.push(
+        restBlock(
+          `rest-stage-${i}`,
+          restSecondsFor(experience, goal, "stage"),
+          next.stage,
+          next.stage === "Allenamento" ? "Pausa · inizio sessione" : next.stage === "Stretching" ? "Pausa · stretching" : "Pausa di passaggio",
+          "Respira, bevi un sorso d’acqua e preparati al blocco successivo.",
+          curr.videoId || next.videoId,
+        ),
+      );
+      continue;
+    }
+
+    if (curr.stage !== "Allenamento" || next.stage !== "Allenamento") continue;
+
+    const sameMove = curr.name === next.name;
+    const sideFlip = sameMove && curr.side && next.side && curr.side !== next.side && curr.set === next.set;
+    const setChange = sameMove && curr.set != null && next.set != null && curr.set !== next.set;
+    const exerciseChange = !sameMove;
+
+    if (sideFlip) {
+      out.push(
+        restBlock(
+          `rest-side-${i}`,
+          restSecondsFor(experience, goal, "short"),
+          "Allenamento",
+          "Cambio lato",
+          "Cambia lato con calma e riparti con la stessa qualità.",
+          next.videoId,
+        ),
+      );
+    } else if (setChange) {
+      out.push(
+        restBlock(
+          `rest-set-${i}`,
+          restSecondsFor(experience, goal, "set"),
+          "Allenamento",
+          `Recupero · serie ${next.set}`,
+          "Recupera il respiro. Prossima serie: mantieni il controllo.",
+          next.videoId,
+        ),
+      );
+    } else if (exerciseChange) {
+      out.push(
+        restBlock(
+          `rest-ex-${i}`,
+          restSecondsFor(experience, goal, "exercise"),
+          "Allenamento",
+          "Recupero tra esercizi",
+          "Scuoti braccia e gambe, poi preparati al prossimo esercizio.",
+          next.videoId,
+        ),
+      );
+    }
+  }
+
+  return out;
+}
+
 function buildWorkout(setup: UserSetup) {
   const hold = (n: number) => holdSeconds(setup.experience, n);
   const sets = setsFor(setup.experience, setup.goal);
@@ -350,7 +462,10 @@ function buildWorkout(setup: UserSetup) {
   return {
     workoutTitle: title,
     workoutSummary: summary,
-    workoutQueue: [...warmup, ...main, ...cooldown],
+    workoutQueue: expandQueueWithRests([...warmup, ...main, ...cooldown], {
+      experience: setup.experience,
+      goal: setup.goal,
+    }),
     todayActivity,
     focus,
     weekLabel: `Obiettivo: ${GOAL_LABEL[setup.goal]} · ${setup.weeklyGoal} giorni/sett.`,
