@@ -446,7 +446,8 @@ function buildWorkout(setup: UserSetup) {
     ex("breath-down", "Respirazione diaframmatica", "Recupero", hold(35), "Stretching", "Inspira dal naso, espira lentamente.", "v0Yj9HjgR64"),
   ];
 
-  if (setup.habitsNotes.toLowerCase().includes("ginocchio") || setup.habitsNotes.toLowerCase().includes("ginocchia")) {
+  const notes = setup.habitsNotes.toLowerCase();
+  if (notes.includes("ginocchio") || notes.includes("ginocchia")) {
     main = main.map((item) =>
       item.name.toLowerCase().includes("squat")
         ? { ...item, name: "Sit-to-stand da sedia", cue: "Usa una sedia stabile, controlla la discesa.", videoId: "2tFi4qBdQlk" }
@@ -454,9 +455,27 @@ function buildWorkout(setup: UserSetup) {
     );
     focus += " · variante ginocchia protetta";
   }
-  if (setup.habitsNotes.toLowerCase().includes("schiena") || setup.habitsNotes.toLowerCase().includes("lombare")) {
+  if (notes.includes("schiena") || notes.includes("lombare")) {
     main = main.filter((item) => !item.name.toLowerCase().includes("burpee"));
     focus += " · attenzione zona lombare";
+  }
+  if (notes.includes("latticin") || notes.includes("lattosio") || notes.includes("dairy")) {
+    focus += " · senza latticini nel piano pasti";
+  }
+  if (notes.includes("vegetar") || notes.includes("plant")) {
+    focus += " · focus vegetariano";
+  }
+  if (notes.includes("spalla") || notes.includes("polso")) {
+    main = main.map((item) =>
+      item.name.toLowerCase().includes("push-up")
+        ? { ...item, name: "Wall push-up", cue: "Mani al muro, corpo lungo, range indolore.", videoId: "IODxDxX7oiE" }
+        : item,
+    );
+    focus += " · push-up a muro";
+  }
+  if (notes.includes("sedentar") || notes.includes("poco movimento")) {
+    main = main.map((item) => (item.isRest ? item : { ...item, seconds: Math.max(16, item.seconds - 6) }));
+    focus += " · volume ridotto per ripresa";
   }
 
   return {

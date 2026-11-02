@@ -4,3 +4,5 @@ dist-vercel/
 .wrangler/
 .vercel/
 _filetree.json
+cloud-data/
+*.local.json
