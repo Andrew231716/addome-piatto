@@ -1,3 +1,4 @@
+import { applyCloudRows, copyLocalData, setCloudRevision, pushCloud } from "./cloud";
 import { idbDelete, idbFindByIndex, idbGet, idbGetAll, idbPut } from "./idb";
 
 export type Account = {
@@ -27,6 +28,8 @@ export type Session = {
   createdAt: string;
   /** ISO timestamp — local session soft expiry. */
   expiresAt: string;
+  remote?: boolean;
+  recoveryCode?: string;
 };
 
 const SESSION_KEY = "current" as const;
@@ -148,7 +151,7 @@ export async function getSession(): Promise<Session | null> {
     await logoutAccount();
     return null;
   }
-  if (!session.syncToken) {
+  if (!session.syncToken && !session.remote) {
     const account =
       (await idbGet<Account>("accounts", session.accountId)) ??
       (await idbGetAll<Account>("accounts")).find((item) => item.id === session.accountId);
@@ -184,7 +187,7 @@ async function writeSession(account: Account): Promise<Session> {
   return session;
 }
 
-export async function registerAccount(input: {
+async function registerLocalAccount(input: {
   email: string;
   name: string;
   password: string;
@@ -216,7 +219,7 @@ export async function registerAccount(input: {
   return writeSession(saved);
 }
 
-export async function loginAccount(input: { email: string; password: string }): Promise<Session> {
+async function loginLocalAccount(input: { email: string; password: string }): Promise<Session> {
   const email = normalizeEmail(input.email);
   const account = await findAccountByEmail(email);
   if (!account) {
@@ -227,7 +230,7 @@ export async function loginAccount(input: { email: string; password: string }): 
   return writeSession(account);
 }
 
-export async function changePassword(accountId: string, currentPassword: string, nextPassword: string): Promise<void> {
+async function changeLocalPassword(accountId: string, currentPassword: string, nextPassword: string): Promise<void> {
   if (nextPassword.length < 6) throw new Error("La nuova password deve avere almeno 6 caratteri.");
   const account = await idbGet<Account>("accounts", accountId);
   if (!account) throw new Error("Account non trovato.");
@@ -239,6 +242,7 @@ export async function changePassword(accountId: string, currentPassword: string,
 }
 
 export async function logoutAccount(): Promise<void> {
+  try { await fetch('/api/account', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'logout' }) }); } catch { /* local logout still works offline */ }
   await idbDelete("sessions", SESSION_KEY);
 }
 
@@ -256,6 +260,12 @@ export async function deleteAccount(accountId: string): Promise<void> {
 }
 
 export async function updateAccountName(accountId: string, name: string): Promise<Session | null> {
+  const session = await idbGet<Session>('sessions', SESSION_KEY);
+  if (session?.remote) {
+    const result = await remoteAccount({ action: 'rename', name });
+    await idbPut('sessions', result.session);
+    return result.session;
+  }
   const account = await idbGet<Account>("accounts", accountId);
   if (!account) return null;
   const next = { ...account, name: name.trim() || account.name };
@@ -280,7 +290,7 @@ export async function migrateLegacyGuest(password = "gymfood"): Promise<Session 
   if (!legacy) return null;
   const accounts = await idbGetAll<Account>("accounts");
   if (accounts.length > 0) return null;
-  return registerAccount({
+  return registerLocalAccount({
     email: "ospite@local.gymfood",
     name: legacy.name,
     password,
@@ -290,4 +300,55 @@ export async function migrateLegacyGuest(password = "gymfood"): Promise<Session 
 export async function sha256Hex(value: string) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return toHex(digest);
+}
+
+async function remoteAccount(body: Record<string, unknown>): Promise<{session: Session; snapshot?: unknown; revision?: number; recoveryCode?: string}> {
+  const response = await fetch('/api/account', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await response.json() as { ok?: boolean; error?: string; session: Session; snapshot?: unknown; revision?: number; recoveryCode?: string };
+  if (!response.ok || !data.ok) throw new Error(data.error || 'Accesso cloud non riuscito');
+  return data;
+}
+async function acceptRemote(result: Awaited<ReturnType<typeof remoteAccount>>, localId?: string) {
+  const session = { ...result.session, recoveryCode: result.recoveryCode };
+  if (Array.isArray(result.snapshot) && result.snapshot.length) await applyCloudRows(session.accountId, result.snapshot);
+  else if (localId) await copyLocalData(localId, session.accountId);
+  setCloudRevision(session.accountId, result.revision ?? 0);
+  await idbPut('sessions', session);
+  if (localId && !result.snapshot) {
+    localStorage.setItem(`gym-cloud-dirty:${session.accountId}`, "true");
+    try { await pushCloud(session); localStorage.removeItem(`gym-cloud-dirty:${session.accountId}`); } catch { /* automatic sync retries, local data retained */ }
+  }
+  return session;
+}
+export async function registerAccount(input: {email:string;name:string;password:string}): Promise<Session> {
+  return acceptRemote(await remoteAccount({action:'register',...input}));
+}
+export async function loginAccount(input: {email:string;password:string}): Promise<Session> {
+  try { const result = await remoteAccount({action:'login',...input}); const previous = await findAccountByEmail(input.email); return await acceptRemote(result, previous?.id); }
+  catch (remoteError) {
+    // A legacy account is migrated only after verifying its password on this device.
+    let local: Session;
+    try { local = await loginLocalAccount(input); } catch { throw remoteError; }
+    if (input.password.length < 10) return local;
+    try { return await acceptRemote(await remoteAccount({action:'register',...input,name:local.name}),local.accountId); }
+    catch { return local; }
+  }
+}
+export async function recoverAccount(input: {email:string;password:string;recoveryCode:string}): Promise<Session> {
+  return acceptRemote(await remoteAccount({action:'recover',...input}));
+}
+export async function generateRecoveryCode(currentPassword: string) {
+  const result = await remoteAccount({action:'recovery-code',currentPassword});
+  return result.recoveryCode!;
+}
+export async function changePassword(accountId: string, currentPassword: string, nextPassword: string) {
+  const session = await idbGet<Session>('sessions',SESSION_KEY);
+  if (session?.remote) {
+    const result = await remoteAccount({action:'change-password',currentPassword,password:nextPassword});
+    await idbPut('sessions',result.session);
+  } else {
+    await changeLocalPassword(accountId,currentPassword,nextPassword);
+    const account = await idbGet<Account>('accounts',accountId);
+    if (account && nextPassword.length >= 10) await acceptRemote(await remoteAccount({action:'register',email:account.email,name:account.name,password:nextPassword}),accountId);
+  }
 }

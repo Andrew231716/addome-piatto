@@ -13,12 +13,11 @@ export function adaptQueueByFeedback(queue: Exercise[], feedback: IntensityFeedb
   if (feedback === "Giusta") return queue;
   const factor = feedback === "Troppo facile" ? 1.18 : 0.82;
   const next = queue
-    .filter((item) => !(feedback === "Troppo intensa" && item.isRest && item.seconds < 18))
     .map((item) => {
       if (item.isRest) {
         return {
           ...item,
-          seconds: scaleSeconds(item.seconds, feedback === "Troppo facile" ? 0.85 : 1.25, 10, 60),
+          seconds: scaleSeconds(item.seconds, feedback === "Troppo facile" ? 0.85 : 1.25, 10, 120),
         };
       }
       return { ...item, seconds: scaleSeconds(item.seconds, factor) };

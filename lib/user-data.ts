@@ -21,6 +21,7 @@ export async function loadUserValue<T>(userId: string, key: string, fallback: T)
 
 export async function saveUserValue<T>(userId: string, key: string, value: T): Promise<void> {
   await idbPut("userData", { key: `${userId}:${key}`, value });
+  window.dispatchEvent(new CustomEvent("gym-data-saved", { detail: userId }));
 }
 
 export async function clearUserValue(userId: string, key: string): Promise<void> {
