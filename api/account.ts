@@ -1,4 +1,4 @@
-import { ApiError, accountId, apiFailure, checkRequest, digest, newSecret, passwordHash, publicSession, readAccount, readBody, requireAccount, safeEqual, setSession, writeAccount, type AccountRecord, type Request, type Response } from '../server/account-store';
+import { ApiError, accountId, apiFailure, checkRequest, digest, newSecret, passwordHash, publicSession, readAccount, readBody, requireAccount, safeEqual, setSession, writeAccount, type AccountRecord, type Request, type Response } from '../server/account-store.js';
 export default async function handler(req:Request,res:Response) {
   try {
     checkRequest(req,res);const b=await readBody(req);const action=String(b.action||'');

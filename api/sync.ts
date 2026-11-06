@@ -1,5 +1,5 @@
-import legacySync from '../server/legacy-sync';
-import { apiFailure, ApiError, checkRequest, readBody, requireAccount, writeAccount, type Request, type Response } from '../server/account-store';
+import legacySync from '../server/legacy-sync.js';
+import { apiFailure, ApiError, checkRequest, readBody, requireAccount, writeAccount, type Request, type Response } from '../server/account-store.js';
 export default async function handler(req:Request,res:Response) {
   try {
     checkRequest(req,res);const b=await readBody(req);req.body=b;
