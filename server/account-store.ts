@@ -14,7 +14,7 @@ function encrypt(data:unknown) { const iv=randomBytes(12);const cipher=createCip
 function decrypt(raw:string):AccountRecord { const e=JSON.parse(raw);const d=createDecipheriv('aes-256-gcm',key(),Buffer.from(e.iv,'base64'));d.setAuthTag(Buffer.from(e.tag,'base64'));return JSON.parse(Buffer.concat([d.update(Buffer.from(e.data,'base64')),d.final()]).toString()); }
 async function github(path:string,init?:RequestInit) {
   if(!process.env.GITHUB_TOKEN||!process.env.GITHUB_REPO)throw new ApiError(503,'Archiviazione cloud non configurata.');
-  return fetch(`https://api.github.com/repos/${process.env.GITHUB_REPO}/${path}`,{...init,headers:{Authorization:`Bearer ${process.env.GITHUB_TOKEN}`,Accept:'application/vnd.github+json','Content-Type':'application/json',...init?.headers}});
+  return fetch(`https://api.github.com/repos/${process.env.GITHUB_REPO}${path ? `/${path}` : ""}`,{...init,headers:{Authorization:`Bearer ${process.env.GITHUB_TOKEN}`,Accept:'application/vnd.github+json','Content-Type':'application/json',...init?.headers}});
 }
 const branch=()=>process.env.GYM_DATA_BRANCH||'gym-data';
 let branchChecked=false;
