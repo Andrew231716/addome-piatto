@@ -495,3 +495,52 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+
+/* Daily tools: calendar, weighed meals and account recovery. */
+.cloud-status { margin: 0 0 12px; color: var(--text-muted, #66736d); font-size: 12px; overflow-wrap: anywhere; }
+.cloud-account { margin-bottom: 20px; display: flex; align-items: center; gap: 20px; justify-content: space-between; }
+.cloud-account p { max-width: 640px; color: #65716c; line-height: 1.6; }
+.recovery-code { display: block; padding: 16px; background: #f3f6f3; border-radius: 12px; overflow-wrap: anywhere; font-size: 16px; user-select: all; }
+.weekly-planner { margin-bottom: 24px; }
+.planner-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; }
+.planner-day { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 14px 10px; background: #f8f9f6; border: 1px solid #e5e9e2; border-radius: 12px; min-width: 0; }
+.planner-day.today { border-color: #ff5c35; background: #fff4ef; }
+.planner-day strong { font-size: 13px; overflow-wrap: anywhere; }
+.planner-day span,.planner-day small { font-size: 11px; color: #59685f; }
+.planner-day .text-button { font-size: 11px; padding: 4px 0; }
+.planner-arrows { display: flex; gap: 10px; align-items: center; }
+.planner-editor { margin-top: 20px; padding-top: 18px; border-top: 1px solid #e4e9e1; }
+.day-picker { display: flex; flex-wrap: wrap; gap: 7px; }
+.day-picker button { border: 1px solid #dfe5dc; border-radius: 9px; padding: 11px; background: #f8faf7; }
+.day-picker button.active { background: #ff5c35; color: #fff; border-color: #ff5c35; }
+.diary-summary { margin: 10px 0 20px; gap: 14px; }
+.diary-summary>div { padding: 10px; }
+.meal-entry { display: flex; align-items: flex-start; gap: 14px; padding: 18px 0; border-top: 1px solid #ecede8; }
+.meal-entry-copy { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
+.meal-entry-copy strong { font-size: 15px; }
+.meal-entry-copy span,.meal-entry-copy small,.meal-entry-copy p { font-size: 12px; color: #59685f; line-height: 1.6; overflow-wrap: anywhere; }
+.meal-entry-copy details { font-size: 12px; }
+.meal-entry-copy summary { cursor: pointer; color: #b63e20; padding: 4px 0; }
+.meal-entry-actions { display: flex; gap: 12px; align-items: center; }
+.meal-entry-actions button { min-height: 36px; }
+.meal-entry.eaten .meal-entry-copy>strong { color: #21805a; }
+.recipe-detail { display: flex; flex-direction: column; gap: 12px; }
+.recipe-detail p { font-size: 13px; line-height: 1.65; }
+.recipe-detail .primary-button { margin-top: auto; }
+.app-dialog { max-height: 88dvh; overflow-y: auto; }
+.page-heading h1 { font-size: clamp(25px, 3vw, 34px); font-weight: 750; }
+.page-heading p { color: #65716c; margin-top: 8px; }
+[hidden] { display: none !important; }
+@media (max-width: 1000px) { .planner-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width: 600px) {
+ .planner-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+ .planner-day { padding: 12px; }
+ .weekly-planner .card-head { align-items: flex-start; }
+ .cloud-account { flex-direction: column; align-items: flex-start; }
+ .meal-entry { gap: 9px; flex-wrap: wrap; }
+ .meal-entry-actions { width: 100%; justify-content: flex-end; }
+ .diary-summary { grid-template-columns: repeat(2,minmax(0,1fr)); }
+ .planner-editor .profile-actions { flex-wrap: wrap; }
+ .page-heading { display: flex; flex-direction: column; align-items: flex-start; gap: 15px; }
+ .shopping-input { flex-wrap: wrap; }
+}

@@ -6,3 +6,5 @@ dist-vercel/
 _filetree.json
 cloud-data/
 *.local.json
+
+*.tsbuildinfo

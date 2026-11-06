@@ -40,20 +40,10 @@ export async function lookupBarcodeOpenFoodFacts(barcode: string): Promise<FoodE
     data.product.product_name ||
     data.product.brands ||
     `Prodotto ${code}`;
-  // Prefer per-serving when present, else per 100g as a transparent estimate.
-  const hasServing = n["energy-kcal_serving"] != null || n.energy_kcal_serving != null;
-  const calories = Math.round(
-    hasServing
-      ? num(n["energy-kcal_serving"] ?? n.energy_kcal_serving)
-      : num(n["energy-kcal_100g"] ?? n.energy_kcal_100g ?? n["energy-kcal"] ?? n.energy_kcal),
-  );
-  const protein = Math.round(
-    hasServing ? num(n.proteins_serving) : num(n.proteins_100g ?? n.proteins),
-  );
-  const carbs = Math.round(
-    hasServing ? num(n.carbohydrates_serving) : num(n.carbohydrates_100g ?? n.carbohydrates),
-  );
-  const fat = Math.round(hasServing ? num(n.fat_serving) : num(n.fat_100g ?? n.fat));
+  const calories = Math.round(num(n["energy-kcal_100g"] ?? n.energy_kcal_100g));
+  const protein = num(n.proteins_100g);
+  const carbs = num(n.carbohydrates_100g);
+  const fat = num(n.fat_100g);
   if (calories <= 0 && protein <= 0 && carbs <= 0 && fat <= 0) return null;
   return {
     name: name.slice(0, 80),
@@ -62,30 +52,7 @@ export async function lookupBarcodeOpenFoodFacts(barcode: string): Promise<FoodE
     carbs: Math.max(0, carbs),
     fat: Math.max(0, fat),
     source: "openfoodfacts",
-    detail: hasServing
-      ? `Porzione OFF${data.product.serving_size ? ` (${data.product.serving_size})` : ""}`
-      : "Valori per 100 g (Open Food Facts)",
-  };
-}
-
-/** Heuristic plate estimate from image size/type — always editable by the user. */
-export async function heuristicFromPhoto(file: File): Promise<FoodEstimate> {
-  const mb = file.size / (1024 * 1024);
-  let calories = 420;
-  if (mb > 2.5) calories = 620;
-  else if (mb > 1.2) calories = 520;
-  else if (mb < 0.35) calories = 280;
-  const protein = Math.round(calories * 0.28 / 4);
-  const fat = Math.round(calories * 0.3 / 9);
-  const carbs = Math.max(20, Math.round((calories - protein * 4 - fat * 9) / 4));
-  return {
-    name: `Piatto da foto · ${file.name.replace(/\.[^.]+$/, "").slice(0, 24) || "stima"}`,
-    calories,
-    protein,
-    carbs,
-    fat,
-    source: "heuristic",
-    detail: "Stima gratuita euristica — correggi prima di salvare",
+    detail: "Valori per 100 g / 100 ml da Open Food Facts: verifica l’etichetta e scegli la quantità.",
   };
 }
 

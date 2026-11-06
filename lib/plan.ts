@@ -1,3 +1,5 @@
+import { plannedMeals, shoppingFromMeals } from "./foods";
+import type { Ingredient } from "./foods";
 export type GoalType = "lose_fat" | "recomp" | "build_muscle" | "endurance" | "maintain";
 export type ActivityLevel = "sedentary" | "light" | "moderate" | "active";
 export type DietStyle = "balanced" | "high_protein" | "mediterranean" | "vegetarian";
@@ -38,6 +40,12 @@ export type Meal = {
   carbs: number;
   fat: number;
   checked: boolean;
+  ingredients?: Ingredient[];
+  recipeId?: string;
+  source?: "recipe" | "manual" | "barcode";
+  grams?: number;
+  per100?: { calories: number; protein: number; carbs: number; fat: number };
+  detail?: string;
 };
 
 export type ShoppingItem = {
@@ -61,6 +69,9 @@ export type UserSetup = {
   diet: DietStyle;
   cookTime: CookTime;
   habitsNotes: string;
+  trainingDays?: number[];
+  sessionMinutes?: number;
+  equipment?: "bodyweight" | "dumbbells";
 };
 
 export type GeneratedPlan = {
@@ -133,10 +144,6 @@ const ACTIVITY_FACTOR: Record<ActivityLevel, number> = {
 const GOAL_LABEL: Record<GoalType, string> = Object.fromEntries(GOAL_OPTIONS.map((g) => [g.id, g.label])) as Record<GoalType, string>;
 const DIET_LABEL: Record<DietStyle, string> = Object.fromEntries(DIET_OPTIONS.map((d) => [d.id, d.label])) as Record<DietStyle, string>;
 
-function uid() {
-  return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `id-${Math.random().toString(36).slice(2)}`;
-}
-
 function ex(
   id: string,
   name: string,
@@ -148,19 +155,6 @@ function ex(
   extra: Partial<Exercise> = {},
 ): Exercise {
   return { id, name, focus, seconds, stage, cue, videoId, ...extra };
-}
-
-function scaleMeal(base: Omit<Meal, "id" | "checked">, factor: number): Meal {
-  return {
-    id: uid(),
-    slot: base.slot,
-    name: base.name,
-    calories: Math.round(base.calories * factor),
-    protein: Math.round(base.protein * factor),
-    carbs: Math.round(base.carbs * factor),
-    fat: Math.round(base.fat * factor),
-    checked: false,
-  };
 }
 
 export function computeCalorieTarget(setup: Pick<UserSetup, "sex" | "weight" | "height" | "age" | "activity" | "goal" | "goalWeight">) {
@@ -183,70 +177,6 @@ export function computeMacros(setup: UserSetup, calories: number) {
   const fat = Math.round((calories * fatRatio) / 9);
   const carbs = Math.max(80, Math.round((calories - protein * 4 - fat * 9) / 4));
   return { protein, carbs, fat };
-}
-
-function mealPools(diet: DietStyle, cookTime: CookTime): Omit<Meal, "id" | "checked">[] {
-  const quick = cookTime === "low";
-  const balanced = [
-    { slot: "Colazione", name: quick ? "Yogurt greco, banana e avena" : "Porridge proteico e frutti di bosco", calories: 380, protein: 24, carbs: 45, fat: 10 },
-    { slot: "Spuntino", name: "Yogurt e mandorle", calories: 210, protein: 17, carbs: 18, fat: 8 },
-    { slot: "Pranzo", name: quick ? "Wrap di pollo e verdure" : "Bowl pollo, riso e verdure", calories: 560, protein: 42, carbs: 55, fat: 14 },
-    { slot: "Merenda", name: "Pane integrale e ricotta", calories: 190, protein: 13, carbs: 24, fat: 5 },
-    { slot: "Cena", name: quick ? "Omelette e insalata" : "Salmone, patate e verdure", calories: 510, protein: 38, carbs: 43, fat: 18 },
-  ];
-  const highProtein = [
-    { slot: "Colazione", name: "Egg white scramble e pane integrale", calories: 360, protein: 32, carbs: 28, fat: 10 },
-    { slot: "Spuntino", name: "Skyr e frutti di bosco", calories: 180, protein: 22, carbs: 16, fat: 2 },
-    { slot: "Pranzo", name: "Petto di pollo, quinoa e broccoli", calories: 580, protein: 52, carbs: 48, fat: 14 },
-    { slot: "Merenda", name: "Frullato proteico", calories: 220, protein: 28, carbs: 18, fat: 4 },
-    { slot: "Cena", name: "Merluzzo, zucchine e riso", calories: 480, protein: 44, carbs: 40, fat: 12 },
-  ];
-  const mediterranean = [
-    { slot: "Colazione", name: "Pane, olio EVO, pomodoro e uova", calories: 400, protein: 20, carbs: 38, fat: 18 },
-    { slot: "Spuntino", name: "Frutta e noci", calories: 200, protein: 5, carbs: 22, fat: 11 },
-    { slot: "Pranzo", name: "Bowl mediterranea con ceci e verdure", calories: 540, protein: 28, carbs: 58, fat: 18 },
-    { slot: "Merenda", name: "Yogurt e miele", calories: 170, protein: 12, carbs: 20, fat: 4 },
-    { slot: "Cena", name: "Pesce azzurro, farro e insalata", calories: 520, protein: 36, carbs: 45, fat: 20 },
-  ];
-  const vegetarian = [
-    { slot: "Colazione", name: "Porridge cacao, banana e semi", calories: 390, protein: 18, carbs: 55, fat: 12 },
-    { slot: "Spuntino", name: "Hummus e carote", calories: 190, protein: 8, carbs: 20, fat: 9 },
-    { slot: "Pranzo", name: "Tofu saltato, riso e verdure", calories: 530, protein: 30, carbs: 56, fat: 16 },
-    { slot: "Merenda", name: "Yogurt di soia e frutta", calories: 180, protein: 12, carbs: 22, fat: 5 },
-    { slot: "Cena", name: "Lenticchie, patate e verdure", calories: 500, protein: 28, carbs: 62, fat: 12 },
-  ];
-  if (diet === "high_protein") return highProtein;
-  if (diet === "mediterranean") return mediterranean;
-  if (diet === "vegetarian") return vegetarian;
-  return balanced;
-}
-
-function shoppingFor(diet: DietStyle): ShoppingItem[] {
-  const base =
-    diet === "vegetarian"
-      ? [
-          ["Tofu", "Proteine"],
-          ["Lenticchie", "Dispensa"],
-          ["Avena", "Dispensa"],
-          ["Verdure miste", "Frutta e verdura"],
-          ["Yogurt di soia", "Proteine"],
-        ]
-      : diet === "mediterranean"
-        ? [
-            ["Pesce azzurro", "Proteine"],
-            ["Ceci", "Dispensa"],
-            ["Olio EVO", "Dispensa"],
-            ["Pomodori", "Frutta e verdura"],
-            ["Farro", "Dispensa"],
-          ]
-        : [
-            ["Petto di pollo", "Proteine"],
-            ["Yogurt greco", "Proteine"],
-            ["Riso integrale", "Dispensa"],
-            ["Verdure miste", "Frutta e verdura"],
-            ["Uova", "Proteine"],
-          ];
-  return base.map(([name, category]) => ({ id: uid(), name, category, checked: false }));
 }
 
 function holdSeconds(experience: Experience, base: number) {
@@ -494,12 +424,7 @@ function buildWorkout(setup: UserSetup) {
 export function buildPlan(setup: UserSetup): GeneratedPlan {
   const calorieTarget = computeCalorieTarget(setup);
   const macros = computeMacros(setup, calorieTarget);
-  const pool = mealPools(setup.diet, setup.cookTime);
-  const poolTotal = pool.reduce((sum, meal) => sum + meal.calories, 0) || 1;
-  const factor = calorieTarget / poolTotal;
-  const meals = pool.map((meal) => scaleMeal(meal, factor));
-  // Mark breakfast checked by default so diary isn't empty of progress cue
-  if (meals[0]) meals[0] = { ...meals[0], checked: true };
+  const meals = plannedMeals(setup.diet, calorieTarget);
   const workout = buildWorkout(setup);
 
   return {
@@ -514,7 +439,7 @@ export function buildPlan(setup: UserSetup): GeneratedPlan {
     calorieTarget,
     macros,
     meals,
-    shopping: shoppingFor(setup.diet),
+    shopping: shoppingFromMeals(meals),
     goalLabel: GOAL_LABEL[setup.goal],
     dietLabel: DIET_LABEL[setup.diet],
     ...workout,

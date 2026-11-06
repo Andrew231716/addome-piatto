@@ -1,4 +1,5 @@
 "use client";
+import { defaultTrainingDays, WEEKDAYS } from "@/lib/schedule";
 
 import { useMemo, useState } from "react";
 import { ArrowLeft, ArrowRight, Check, Sparkles, Target } from "lucide-react";
@@ -38,9 +39,9 @@ export function SetupWizard({ initialName = "", initial, onComplete, onCancel, c
 
   const canNext =
     step === 0
-      ? setup.name.trim().length >= 2 && setup.age >= 14 && setup.height >= 120 && setup.weight >= 35
+      ? setup.name.trim().length >= 2 && setup.age >= 18 && setup.age <= 100 && setup.height >= 120 && setup.height <= 230 && setup.weight >= 35 && setup.weight <= 350
       : step === 1
-        ? setup.goalWeight >= 35 && setup.weeklyGoal >= 2
+        ? setup.goalWeight >= 35 && setup.goalWeight <= 350 && setup.weeklyGoal >= 1
         : true;
 
   const patch = (partial: Partial<UserSetup>) => setSetup((current) => ({ ...current, ...partial }));
@@ -129,9 +130,9 @@ export function SetupWizard({ initialName = "", initial, onComplete, onCancel, c
               </label>
               <label>Allenamenti a settimana
                 <div className="stepper">
-                  <button type="button" onClick={() => patch({ weeklyGoal: Math.max(2, setup.weeklyGoal - 1) })}>−</button>
+                  <button type="button" onClick={() => patch({ weeklyGoal: Math.max(1, setup.weeklyGoal - 1), trainingDays: defaultTrainingDays(Math.max(1, setup.weeklyGoal - 1)) })}>−</button>
                   <strong>{setup.weeklyGoal}</strong>
-                  <button type="button" onClick={() => patch({ weeklyGoal: Math.min(6, setup.weeklyGoal + 1) })}>+</button>
+                  <button type="button" onClick={() => patch({ weeklyGoal: Math.min(6, setup.weeklyGoal + 1), trainingDays: defaultTrainingDays(Math.min(6, setup.weeklyGoal + 1)) })}>+</button>
                 </div>
               </label>
             </div>
@@ -151,6 +152,9 @@ export function SetupWizard({ initialName = "", initial, onComplete, onCancel, c
                 {EXPERIENCE_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
               </select>
             </label>
+            <label>Giorni di allenamento<div className="day-picker">{WEEKDAYS.map((day,index)=>{const days=setup.trainingDays??defaultTrainingDays(setup.weeklyGoal);return <button type="button" key={day} aria-pressed={days.includes(index)} className={days.includes(index)?'active':''} onClick={()=>{const next=days.includes(index)?days.filter(d=>d!==index):[...days,index];if(next.length)patch({trainingDays:next,weeklyGoal:next.length});}}>{day}</button>;})}</div></label>
+            <label>Tempo per sessione<select className="setup-select" value={setup.sessionMinutes??20} onChange={e=>patch({sessionMinutes:Number(e.target.value)})}>{[10,15,20,30,40].map(n=><option key={n} value={n}>{n} minuti</option>)}</select></label>
+            <label>Attrezzatura<select className="setup-select" value={setup.equipment??'bodyweight'} onChange={e=>patch({equipment:e.target.value as UserSetup['equipment']})}><option value="bodyweight">Corpo libero</option><option value="dumbbells">Manubri e corpo libero</option></select></label>
             <label>Stile alimentare
               <select className="setup-select" value={setup.diet} onChange={(e) => patch({ diet: e.target.value as UserSetup["diet"] })}>
                 {DIET_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
@@ -171,7 +175,7 @@ export function SetupWizard({ initialName = "", initial, onComplete, onCancel, c
               <Textarea
                 value={setup.habitsNotes}
                 onChange={(e) => patch({ habitsNotes: e.target.value })}
-                placeholder="Es. lavoro sedentario, poca voglia la sera, ginocchio sensibile, non mangio latticini…"
+                placeholder="Promemoria personali. Allergie e indicazioni cliniche vanno verificate nelle ricette: queste note non modificano il piano."
               />
             </label>
           </div>
@@ -190,9 +194,9 @@ export function SetupWizard({ initialName = "", initial, onComplete, onCancel, c
                 <li><strong>Macro</strong> P {preview.macros.protein}g · C {preview.macros.carbs}g · G {preview.macros.fat}g</li>
                 <li><strong>Dieta</strong> {preview.dietLabel}</li>
                 <li><strong>Oggi</strong> {preview.todayActivity}</li>
-                <li><strong>Pasti piano</strong> {preview.meals.length} pasti pronti nel diario</li>
+                <li><strong>Pasti piano</strong> {preview.meals.length} pasti previsti, da confermare quando consumati</li>
               </ul>
-              {setup.habitsNotes.trim() && <p className="setup-note">Note considerate: {setup.habitsNotes.trim()}</p>}
+              {setup.habitsNotes.trim() && <p className="setup-note">Note personali salvate (non interpretate automaticamente): {setup.habitsNotes.trim()}</p>}
             </div>
           </div>
         )}
