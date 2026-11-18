@@ -548,3 +548,15 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .next-meal-card { display:flex; align-items:center; justify-content:space-between; gap:20px; }
 .next-meal-card p { color:#65716c; font-size:13px; margin-top:8px; }
 @media(max-width:600px){.next-meal-card{align-items:flex-start;flex-direction:column}.diary-date-controls{gap:7px}.diary-date-controls label{max-width:160px}}
+
+.quick-actions { display: flex; flex-wrap: wrap; gap: .65rem; }
+.gym-mode { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: .75rem; margin-bottom: 1rem; }
+.gym-mode label { display: flex; align-items: center; gap: .5rem; }
+.gym-training { display: grid; gap: .9rem; }
+.gym-exercise { border: 1px solid var(--border); border-radius: .8rem; padding: .65rem .85rem; }
+.gym-exercise summary { cursor: pointer; min-height: 44px; padding-block: .35rem; }
+.gym-exercise summary > span { display: block; font-size: .86rem; }
+.gym-exercise form { margin-block: .75rem; }
+.gym-set { display: flex; justify-content: space-between; gap: .5rem; }
+.food-shortcuts { margin-block: .75rem; }
+.food-shortcuts button { margin: .25rem .25rem .25rem 0; min-height: 44px; }

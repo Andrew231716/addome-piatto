@@ -1,3 +1,5 @@
+import { localDate } from "./dates";
+
 export type NotifyPrefs = {
   workout: boolean;
   meals: boolean;
@@ -10,7 +12,7 @@ const LAST_KEY = "gym-food-notify-last-v1";
 type LastFired = Partial<Record<"workout" | "meals" | "coach" | "weekly", string>>;
 
 function todayKey() {
-  return new Date().toISOString().slice(0, 10);
+  return localDate();
 }
 
 function readLast(): LastFired {
@@ -30,28 +32,31 @@ function canNotify() {
   return typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted";
 }
 
+export async function showDeviceNotification(title: string, options: NotificationOptions) {
+  const registration = await navigator.serviceWorker?.getRegistration();
+  if (registration?.active) await registration.showNotification(title, options);
+  else new Notification(title, options);
+}
+
+const inFlight = new Set<keyof LastFired>();
 function fire(title: string, body: string, kind: keyof LastFired) {
-  if (!canNotify()) return false;
-  const last = readLast();
-  if (last[kind] === todayKey()) return false;
-  try {
-    new Notification(title, { body, tag: `gym-food-${kind}` });
-    markFired(kind);
-    return true;
-  } catch {
-    return false;
-  }
+  if (!canNotify() || inFlight.has(kind) || readLast()[kind] === todayKey()) return;
+  inFlight.add(kind);
+  void showDeviceNotification(title, { body, tag: `gym-food-${kind}` })
+    .then(() => markFired(kind))
+    .catch(() => { /* Device rejected the notification. */ })
+    .finally(() => inFlight.delete(kind));
 }
 
 /** Check reminder windows while the app is open (browser/PWA limitation on iOS). */
-export function runNotificationChecks(prefs: NotifyPrefs, ctx: { workoutDone: boolean; mealsLogged: number; mealsTotal: number }) {
+export function runNotificationChecks(prefs: NotifyPrefs, ctx: { workoutPlanned: boolean; workoutDone: boolean; mealsLogged: number; mealsTotal: number }) {
   if (!canNotify()) return;
   const hour = new Date().getHours();
 
-  if (prefs.workout && !ctx.workoutDone && hour >= 17) {
+  if (prefs.workout && ctx.workoutPlanned && !ctx.workoutDone && hour >= 17) {
     fire("GYM & FOOD", "Hai ancora l’allenamento di oggi da fare.", "workout");
   }
-  if (prefs.meals && ctx.mealsLogged < Math.max(1, Math.ceil(ctx.mealsTotal * 0.5)) && hour >= 13 && hour < 16) {
+  if (prefs.meals && ctx.mealsTotal > 0 && ctx.mealsLogged < Math.max(1, Math.ceil(ctx.mealsTotal * 0.5)) && hour >= 13 && hour < 16) {
     fire("GYM & FOOD", "Ricorda di aggiornare il diario alimentare.", "meals");
   }
   if (prefs.coach && hour >= 20) {

@@ -50,6 +50,7 @@ export function GuidedWorkout({ open, onOpenChange, voiceEnabled, onComplete, qu
   const [pipOpen, setPipOpen] = useState(false);
   const [finished, setFinished] = useState(false);
   const [feedback, setFeedback] = useState("");
+  const deadline = useRef<number | null>(null);
   const prevRunning = useRef(false);
   const exercise = safeQueue[index] ?? safeQueue[0];
   const nextExercise = safeQueue[index + 1];
@@ -58,7 +59,7 @@ export function GuidedWorkout({ open, onOpenChange, voiceEnabled, onComplete, qu
   const totalMinutes = Math.max(1, Math.round(safeQueue.reduce((sum, item) => sum + item.seconds, 0) / 60));
 
   useEffect(() => {
-    if (!open) return;
+    deadline.current = null;
     setIndex(0);
     setSeconds(safeQueue[0]?.seconds ?? 30);
     setRunning(false);
@@ -67,7 +68,7 @@ export function GuidedWorkout({ open, onOpenChange, voiceEnabled, onComplete, qu
     setVideoInline(true);
     setPipOpen(false);
     prevRunning.current = false;
-  }, [open, safeQueue]);
+  }, [safeQueue]);
 
   const speak = (message: string) => {
     if (!voiceEnabled || !("speechSynthesis" in window)) return;
@@ -113,6 +114,7 @@ export function GuidedWorkout({ open, onOpenChange, voiceEnabled, onComplete, qu
     const safe = Math.max(0, next);
     const from = safeQueue[index];
     const to = safeQueue[safe];
+    deadline.current = running ? Date.now() + to.seconds * 1000 : null;
     setIndex(safe);
     setSeconds(to.seconds);
     soundForTransition(from, to);
@@ -121,30 +123,39 @@ export function GuidedWorkout({ open, onOpenChange, voiceEnabled, onComplete, qu
   };
 
   useEffect(() => {
-    if (!running || finished) return;
-    const timer = window.setInterval(() => {
-      setSeconds((current) => {
-        if (current <= 1) {
-          window.clearInterval(timer);
-          window.setTimeout(() => moveTo(index + 1, { autoContinue: true }), 220);
-          return 0;
-        }
-        if (current === 4) {
-          playWorkoutSound("countdown");
-          speak("Tre, due, uno");
-        } else if (current <= 3) {
-          playWorkoutSound("countdown");
-        }
-        return current - 1;
-      });
-    }, 1000);
-    return () => window.clearInterval(timer);
+    if (!running || finished || !open) return;
+    let last = seconds;
+    const tick = () => {
+      const finishAt = deadline.current;
+      if (finishAt === null) return;
+      const remaining = Math.max(0, Math.ceil((finishAt - Date.now()) / 1000));
+      if (remaining === last) return;
+      last = remaining;
+      setSeconds(remaining);
+      if (!remaining) {
+        window.clearInterval(timer);
+        moveTo(index + 1, { autoContinue: true });
+      } else if (remaining <= 3) {
+        playWorkoutSound("countdown");
+        if (remaining === 3) speak("Tre, due, uno");
+      }
+    };
+    const timer = window.setInterval(tick, 150);
+    document.addEventListener("visibilitychange", tick);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", tick);
+    };
+    // The deadline changes on transition or resume, not on each timer display update.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running, index, finished]);
+  }, [running, index, finished, open]);
 
   useEffect(() => {
     if (!open) {
+      if (deadline.current !== null) setSeconds(Math.max(1, Math.ceil((deadline.current - Date.now()) / 1000)));
+      deadline.current = null;
       setRunning(false);
+      if (finished) resetAll();
       if ("speechSynthesis" in window) window.speechSynthesis.cancel();
     }
   }, [open]);
@@ -173,6 +184,7 @@ export function GuidedWorkout({ open, onOpenChange, voiceEnabled, onComplete, qu
   }, [running, open, finished]);
 
   const resetAll = () => {
+    deadline.current = null;
     setIndex(0);
     setSeconds(safeQueue[0]?.seconds ?? 30);
     setRunning(false);
@@ -184,10 +196,12 @@ export function GuidedWorkout({ open, onOpenChange, voiceEnabled, onComplete, qu
     const next = !running;
     setRunning(next);
     if (next) {
+      deadline.current = Date.now() + seconds * 1000;
       playWorkoutSound(exercise?.isRest ? "rest" : "exercise");
       announce(exercise);
     } else {
-      playWorkoutSound("pause");
+      if (deadline.current !== null) setSeconds(Math.max(1, Math.ceil((deadline.current - Date.now()) / 1000)));
+      deadline.current = null;
     }
   };
 
@@ -296,7 +310,7 @@ export function GuidedWorkout({ open, onOpenChange, voiceEnabled, onComplete, qu
               </div>
             )}
             <div className="workout-foot">
-              <button onClick={() => { setSeconds(exercise.seconds); setRunning(true); }}>
+              <button onClick={() => { deadline.current = Date.now() + exercise.seconds * 1000; setSeconds(exercise.seconds); setRunning(true); }}>
                 <TimerReset size={17} /> {exercise.isRest ? "Riparti la pausa" : "Fatto male? Riparti dall’inizio"}
               </button>
               <span>

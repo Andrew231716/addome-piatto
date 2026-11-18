@@ -61,8 +61,9 @@ export function plannedMeals(diet: DietStyle, calories: number): Meal[] {
 export function shoppingFromMeals(meals: Meal[], days = 1): ShoppingItem[] {
   const totals = new Map<string, number>();
   for (const meal of meals) for (const i of meal.ingredients ?? []) totals.set(i.foodId, (totals.get(i.foodId) ?? 0) + i.grams * days);
-  return [...totals].map(([id, grams]) => {
-    const f = FOODS.find(f => f.id === id)!;
-    return { id: `food-${id}`, name: `${f.name} · ${Math.round(grams)} g (${f.state})`, category: f.category, checked: false };
+  return [...totals].flatMap(([id, grams]) => {
+    const f = FOODS.find(f => f.id === id);
+    if (!f || grams <= 0) return [];
+    return [{ id: `food-${id}`, name: `${f.name} · ${Math.round(grams)} g (${f.state})`, category: f.category, checked: false }];
   });
 }
