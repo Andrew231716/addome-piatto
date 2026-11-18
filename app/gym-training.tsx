@@ -1,5 +1,6 @@
 import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import { toast } from "sonner";
+import type { UserSetup } from "@/lib/plan";
 import { Input } from "@/components/ui/input";
 
 export type GymDay = "A" | "B" | "C";
@@ -40,18 +41,27 @@ const plans: Record<GymDay, Exercise[]> = {
   ],
 };
 
-export function GymTraining({ day, setDay, sets, setSets, date, onComplete, completed }: {
+export function GymTraining({ day, setDay, sets, setSets, date, onComplete, completed, setup }: {
   day: GymDay; setDay: (day: GymDay) => void;
   sets: GymSet[]; setSets: Dispatch<SetStateAction<GymSet[]>>;
-  date: string; onComplete: () => void; completed: boolean;
+  setup: UserSetup; date: string; onComplete: () => void; completed: boolean;
 }) {
+  const targetSets = setup.experience === "beginner" ? 2 : 3;
+  const rest = setup.goal === "endurance" ? 90 : 120;
+  const repetitions = setup.goal === "endurance" ? "12–15" : "8–12";
+  const exercises = plans[day].slice(0, Math.max(6, Math.min(plans[day].length,
+    Math.floor(((setup.sessionMinutes ?? 40) * 60 - 300) / (targetSets * (45 + rest))))));
+  const estimatedMinutes = Math.ceil((300 + exercises.length * targetSets * (45 + rest)) / 60);
   const today = sets.filter(set => set.date === date && set.day === day);
   return <section className="surface-card gym-training">
     <h2>Schede solo macchinari</h2>
+    <p>{exercises.length} esercizi · {targetSets} serie · circa {estimatedMinutes} min con 5 min di riscaldamento. Disponibilità indicata {setup.sessionMinutes ?? 40} min.</p>
+    {estimatedMinutes > (setup.sessionMinutes ?? 40) && <p className="plan-notices">Il tempo selezionato è breve per completare questa scheda full body con recuperi. Aumenta la durata nelle abitudini o concorda una scheda più breve con il trainer.</p>}
+    <p>Scegli un carico controllabile, con circa 2–3 ripetizioni ancora possibili alla fine. Conferma tecnica e regolazione delle macchine con il trainer.</p>
     <div className="quick-actions" role="group" aria-label="Seleziona scheda">
       {(["A", "B", "C"] as const).map(item => <button key={item} className={item === day ? "primary-button" : "secondary-button"} aria-pressed={item === day} onClick={() => setDay(item)}>Scheda {item}</button>)}
     </div>
-    {plans[day].map(item => <MachineEntry key={day + item.machine} exercise={item} sets={sets} today={today} onAdd={(machine, reps, load) => {
+    {exercises.map(item => <MachineEntry targetSets={targetSets} key={day + item.machine} exercise={{...item, reps: repetitions, rest}} sets={sets} today={today} onAdd={(machine, reps, load) => {
       const entry = { id: crypto.randomUUID(), date, day, exercise: item.machine, machine, reps, load };
       setSets(previous => [...previous, entry]);
       toast.success("Serie registrata");
@@ -60,8 +70,8 @@ export function GymTraining({ day, setDay, sets, setSets, date, onComplete, comp
   </section>;
 }
 
-function MachineEntry({ exercise, sets, today, onAdd, onDelete }: {
-  exercise: Exercise; sets: GymSet[]; today: GymSet[];
+function MachineEntry({ exercise, targetSets, sets, today, onAdd, onDelete }: {
+  exercise: Exercise; targetSets: number; sets: GymSet[]; today: GymSet[];
   onAdd: (machine: string, reps: number, load: number) => void;
   onDelete: (id: string) => void;
 }) {
@@ -80,7 +90,7 @@ function MachineEntry({ exercise, sets, today, onAdd, onDelete }: {
     return () => clearInterval(timer);
   }, [restActive]);
   return <details className="gym-exercise">
-    <summary><strong>{machine}</strong><span>{recorded.length}/3 serie · {exercise.reps} rip. · {exercise.rest} s</span></summary>
+    <summary><strong>{machine}</strong><span>{recorded.length}/{targetSets} serie · {exercise.reps} rip. · {exercise.rest} s</span></summary>
     <form className="form-stack" onSubmit={event => {
       event.preventDefault();
       onAdd(machine, Number(reps), Number(load));

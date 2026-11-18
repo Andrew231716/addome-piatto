@@ -4,7 +4,7 @@ import accountHandler from '../api/account';
 import syncHandler from '../api/sync';
 import { adaptQueueByFeedback } from '../lib/adapt-workout';
 import { buildPlan, DEFAULT_SETUP, computeCalorieTarget } from '../lib/plan';
-import { ingredientTotals, nutrientsFor, FOODS, shoppingFromMeals } from '../lib/foods';
+import { ingredientTotals, nutrientsFor, FOODS, FOOD_RECIPES, shoppingFromMeals } from '../lib/foods';
 import { activityForDate, sessionForDate, weekSummary } from '../lib/schedule';
 import { archiveDay, weightTrend } from '../lib/history';
 import { localDate, shiftDate, weekDates } from '../lib/dates';
@@ -60,3 +60,17 @@ assert.equal((await request(syncHandler,{action:'pull'},register.cookie)).status
 assert.equal((await request(accountHandler,{action:'login',email:'qa@example.invalid',password:'new-test-password'})).status,200);
 mock.restore();
 console.log('PASS: quantities, meal confirmations, schedule, recovery days, intensity, local dates, history, weight trends, encrypted auth, second-device login, sync conflicts, tampered sessions, cross-origin requests and recovery.');
+
+// Personalization must respect structured exclusions and keep macro energy coherent.
+const personal = {...DEFAULT_SETUP, sex:'male' as const, age:44, height:178, weight:80, goal:'lose_fat' as const, cookTime:'low' as const, excludedFoods:['yogurt','ricotta']};
+const personalPlan = buildPlan(personal);
+assert(personalPlan.meals.every(meal => meal.ingredients!.every(item => !personal.excludedFoods.includes(item.foodId))));
+assert.equal(new Set(personalPlan.meals.map(meal => meal.slot)).size,5);
+assert(personalPlan.meals.every(meal => {
+  const recipe = FOOD_RECIPES.find(recipe => recipe.id === meal.recipeId);
+  return recipe && recipe.minutes <= 10;
+}));
+const calorieBalance = personalPlan.macros.protein*4 + personalPlan.macros.carbs*4 + personalPlan.macros.fat*9;
+assert(Math.abs(calorieBalance-personalPlan.calorieTarget)<=4);
+assert(computeCalorieTarget({...personal,goal:'build_muscle'})>personalPlan.calorieTarget);
+assert(sessionForDate({...personal,trainingDays:[0,2,4],sessionMinutes:60},'2026-11-06').filter(item=>item.set).every(item => item.set!<=2));

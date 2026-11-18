@@ -37,7 +37,7 @@ export function sessionForDate(setup: UserSetup, date: string): Exercise[] {
   const cooldown = base.filter(e => !e.isRest && e.stage === 'Stretching');
   const targetSeconds = activity.minutes * 60;
   let queue = expandQueueWithRests([...warmup, ...cooldown], { experience: setup.experience, goal: setup.goal });
-  for (let round = 1; round <= 12; round++) {
+  for (let round = 1; round <= (setup.experience === "beginner" ? 2 : 3); round++) {
     const candidate = [...work, ...moves.map(m => ({ ...m, id: `${m.id}-${round}`, set: round }))];
     const expanded = expandQueueWithRests([...warmup, ...candidate, ...cooldown], { experience: setup.experience, goal: setup.goal });
     if (round > 1 && expanded.reduce((s,e) => s+e.seconds, 0) > targetSeconds) break;
