@@ -560,3 +560,33 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .gym-set { display: flex; justify-content: space-between; gap: .5rem; }
 .food-shortcuts { margin-block: .75rem; }
 .food-shortcuts button { margin: .25rem .25rem .25rem 0; min-height: 44px; }
+
+/* Daily actions and source details share the same readable card rhythm. */
+.page-stack { gap: 1.1rem; }
+.page-heading h1 { font-size: clamp(1.65rem, 4.5vw, 2.35rem); line-height: 1.15; }
+.quick-actions > button { min-height: 48px; flex: 1 1 160px; justify-content: center; }
+.plan-method { margin-bottom: 1rem; }
+.plan-method > summary { cursor: pointer; font-weight: 700; min-height: 44px; padding-block: .5rem; }
+.plan-method p, .plan-method li { line-height: 1.6; max-width: 76ch; }
+.plan-method ul { padding-left: 1.25rem; }
+.plan-method a { color: #12644b; text-decoration: underline; text-underline-offset: 3px; }
+.plan-numbers { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: .65rem; margin-block: .8rem; }
+.plan-numbers > div { display: grid; gap: .4rem; background: #f4f7f2; border-radius: 12px; padding: .85rem; color: #183c31; }
+.plan-numbers strong { font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+.plan-notices { padding: .8rem 1.8rem; border-radius: 12px; background: #fff6df; color: #59461b; }
+.food-exclusions > label { display: flex; align-items: center; gap: .6rem; min-height: 44px; }
+.food-exclusions input { width: 20px; height: 20px; }
+.gym-exercise summary { display: flex; flex-wrap: wrap; gap: .4rem 1rem; justify-content: space-between; }
+.gym-exercise summary > span { color: #475a50; }
+.gym-exercise { border-color: #d7e2d9; background: #fbfdfb; }
+.form-stack input:focus-visible, button:focus-visible, summary:focus-visible { outline: 3px solid #348364; outline-offset: 3px; }
+@media (max-width: 640px) {
+  .surface-card { padding: 1rem; border-radius: 16px; }
+  .meal-entry { align-items: flex-start; flex-wrap: wrap; }
+  .meal-entry-actions { display: flex; flex-wrap: wrap; gap: .5rem; width: 100%; justify-content: flex-end; }
+  .gym-exercise .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .app-body { padding-bottom: calc(90px + env(safe-area-inset-bottom)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}

@@ -71,6 +71,7 @@ export type UserSetup = {
   habitsNotes: string;
   trainingDays?: number[];
   sessionMinutes?: number;
+  excludedFoods?: string[];
   equipment?: "bodyweight" | "dumbbells";
 };
 
@@ -160,22 +161,19 @@ function ex(
 export function computeCalorieTarget(setup: Pick<UserSetup, "sex" | "weight" | "height" | "age" | "activity" | "goal" | "goalWeight">) {
   const sexOffset = setup.sex === "female" ? -161 : setup.sex === "male" ? 5 : -78;
   const bmr = 10 * setup.weight + 6.25 * setup.height - 5 * setup.age + sexOffset;
-  let calories = Math.round(bmr * ACTIVITY_FACTOR[setup.activity]);
-  if (setup.goal === "lose_fat") calories -= 400;
-  else if (setup.goal === "recomp") calories -= 200;
-  else if (setup.goal === "build_muscle") calories += 250;
-  else if (setup.goal === "endurance") calories += 100;
-  if (setup.goalWeight < setup.weight - 0.5) calories = Math.min(calories, Math.round(bmr * ACTIVITY_FACTOR[setup.activity] - 300));
-  if (setup.goalWeight > setup.weight + 0.5) calories = Math.max(calories, Math.round(bmr * ACTIVITY_FACTOR[setup.activity] + 150));
-  return Math.max(1400, Math.min(3600, calories));
+  const maintenance = Math.round(bmr * ACTIVITY_FACTOR[setup.activity]);
+  const adjustment = setup.goal === "lose_fat" ? -.15 : setup.goal === "recomp" ? -.05 : setup.goal === "build_muscle" ? .08 : 0;
+  // Conservative app policy. The equation predicts resting expenditure, not this adjustment.
+  return Math.max(1400, Math.min(3600, Math.round(maintenance * (1 + adjustment))));
+
 }
 
 export function computeMacros(setup: UserSetup, calories: number) {
   const proteinPerKg = setup.goal === "build_muscle" || setup.diet === "high_protein" ? 2.0 : setup.goal === "lose_fat" ? 1.9 : 1.6;
-  const protein = Math.round(setup.weight * proteinPerKg);
+  const protein = Math.round(Math.min(setup.weight * proteinPerKg, calories * .3 / 4));
   const fatRatio = setup.diet === "mediterranean" ? 0.32 : 0.27;
   const fat = Math.round((calories * fatRatio) / 9);
-  const carbs = Math.max(80, Math.round((calories - protein * 4 - fat * 9) / 4));
+  const carbs = Math.max(0, Math.round((calories - protein * 4 - fat * 9) / 4));
   return { protein, carbs, fat };
 }
 
@@ -376,37 +374,6 @@ function buildWorkout(setup: UserSetup) {
     ex("breath-down", "Respirazione diaframmatica", "Recupero", hold(35), "Stretching", "Inspira dal naso, espira lentamente.", "v0Yj9HjgR64"),
   ];
 
-  const notes = setup.habitsNotes.toLowerCase();
-  if (notes.includes("ginocchio") || notes.includes("ginocchia")) {
-    main = main.map((item) =>
-      item.name.toLowerCase().includes("squat")
-        ? { ...item, name: "Sit-to-stand da sedia", cue: "Usa una sedia stabile, controlla la discesa.", videoId: "2tFi4qBdQlk" }
-        : item,
-    );
-    focus += " · variante ginocchia protetta";
-  }
-  if (notes.includes("schiena") || notes.includes("lombare")) {
-    main = main.filter((item) => !item.name.toLowerCase().includes("burpee"));
-    focus += " · attenzione zona lombare";
-  }
-  if (notes.includes("latticin") || notes.includes("lattosio") || notes.includes("dairy")) {
-    focus += " · senza latticini nel piano pasti";
-  }
-  if (notes.includes("vegetar") || notes.includes("plant")) {
-    focus += " · focus vegetariano";
-  }
-  if (notes.includes("spalla") || notes.includes("polso")) {
-    main = main.map((item) =>
-      item.name.toLowerCase().includes("push-up")
-        ? { ...item, name: "Wall push-up", cue: "Mani al muro, corpo lungo, range indolore.", videoId: "IODxDxX7oiE" }
-        : item,
-    );
-    focus += " · push-up a muro";
-  }
-  if (notes.includes("sedentar") || notes.includes("poco movimento")) {
-    main = main.map((item) => (item.isRest ? item : { ...item, seconds: Math.max(16, item.seconds - 6) }));
-    focus += " · volume ridotto per ripresa";
-  }
 
   return {
     workoutTitle: title,
@@ -424,7 +391,7 @@ function buildWorkout(setup: UserSetup) {
 export function buildPlan(setup: UserSetup): GeneratedPlan {
   const calorieTarget = computeCalorieTarget(setup);
   const macros = computeMacros(setup, calorieTarget);
-  const meals = plannedMeals(setup.diet, calorieTarget);
+  const meals = plannedMeals(setup.diet, calorieTarget, setup, macros.protein);
   const workout = buildWorkout(setup);
 
   return {

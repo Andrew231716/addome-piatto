@@ -1,4 +1,6 @@
 "use client";
+import { PlanMethod } from "./plan-method";
+import { FOODS } from "@/lib/foods";
 import { localDate } from "@/lib/dates";
 import { defaultTrainingDays, WEEKDAYS, activityForDate, sessionForDate } from "@/lib/schedule";
 
@@ -160,7 +162,7 @@ export function SetupWizard({ initialName = "", initial, onComplete, onCancel, c
               </select>
             </label>
             <label>Giorni di allenamento<div className="day-picker">{WEEKDAYS.map((day,index)=>{const days=setup.trainingDays??defaultTrainingDays(setup.weeklyGoal);return <button type="button" aria-label={day} key={day} aria-pressed={days.includes(index)} className={days.includes(index)?'active':''} onClick={()=>{const next=days.includes(index)?days.filter(d=>d!==index):[...days,index];if(next.length)patch({trainingDays:next,weeklyGoal:next.length});}}>{day}</button>;})}</div></label>
-            <label>Tempo per sessione<select className="setup-select" value={setup.sessionMinutes??20} onChange={e=>patch({sessionMinutes:Number(e.target.value)})}>{[10,15,20,30,40].map(n=><option key={n} value={n}>{n} minuti</option>)}</select></label>
+            <label>Tempo per sessione<select className="setup-select" value={setup.sessionMinutes??20} onChange={e=>patch({sessionMinutes:Number(e.target.value)})}>{[10,15,20,30,40,50,60].map(n=><option key={n} value={n}>{n} minuti</option>)}</select></label>
             <label>Attrezzatura<select className="setup-select" value={setup.equipment??'bodyweight'} onChange={e=>patch({equipment:e.target.value as UserSetup['equipment']})}><option value="bodyweight">Corpo libero</option><option value="dumbbells">Manubri e corpo libero</option></select></label>
             <label>Stile alimentare
               <select className="setup-select" value={setup.diet} onChange={(e) => patch({ diet: e.target.value as UserSetup["diet"] })}>
@@ -178,6 +180,7 @@ export function SetupWizard({ initialName = "", initial, onComplete, onCancel, c
                 ))}
               </div>
             </label>
+            <details className="food-exclusions"><summary>Alimenti da escludere dai pasti generati</summary><p>Seleziona gli ingredienti. Per allergie, verifica anche etichette e contaminazioni.</p>{FOODS.map(food => <label key={food.id}><input type="checkbox" checked={setup.excludedFoods?.includes(food.id) ?? false} onChange={event => patch({excludedFoods:event.target.checked ? [...(setup.excludedFoods ?? []), food.id] : (setup.excludedFoods ?? []).filter(id => id !== food.id)})} />{food.name}</label>)}</details>
             <label>Descrivi abitudini, limiti o preferenze
               <Textarea
                 value={setup.habitsNotes}
@@ -203,6 +206,7 @@ export function SetupWizard({ initialName = "", initial, onComplete, onCancel, c
                 <li><strong>Oggi</strong> {preview.todayActivity}</li>
                 <li><strong>Pasti piano</strong> {preview.meals.length} pasti previsti, da confermare quando consumati</li>
               </ul>
+              <PlanMethod setup={setup} meals={preview.meals} />
               {setup.habitsNotes.trim() && <p className="setup-note">Note personali salvate (non interpretate automaticamente): {setup.habitsNotes.trim()}</p>}
             </div>
           </div>

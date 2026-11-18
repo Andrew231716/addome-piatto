@@ -1,4 +1,4 @@
-import type { Meal, ShoppingItem, DietStyle } from './plan';
+import type { Meal, ShoppingItem, DietStyle, UserSetup } from './plan';
 export type Nutrients = { calories: number; protein: number; carbs: number; fat: number };
 export type Food = Nutrients & { id: string; name: string; state: string; category: string };
 export type Ingredient = { foodId: string; grams: number };
@@ -40,6 +40,10 @@ export function ingredientTotals(ingredients: Ingredient[]): Nutrients {
 export type FoodRecipe = { id: string; name: string; slot: string; minutes: number; vegetarian: boolean; ingredients: Ingredient[]; instructions: string };
 const parts = (...items: [string, number][]): Ingredient[] => items.map(([foodId, grams]) => ({ foodId, grams }));
 export const FOOD_RECIPES: FoodRecipe[] = [
+  { id: 'soy-breakfast', name: 'Soia, avena e banana', slot: 'Colazione', minutes: 5, vegetarian: true, ingredients: parts(['soy', 200], ['oats', 50], ['banana', 100]), instructions: 'Mescola yogurt di soia e avena, aggiungi la banana a pezzi. Controlla gli ingredienti del prodotto.' },
+  { id: 'soy-snack', name: 'Yogurt di soia e noci', slot: 'Merenda', minutes: 3, vegetarian: true, ingredients: parts(['soy', 200], ['nuts', 20]), instructions: 'Servi lo yogurt di soia con le noci dosate.' },
+  { id: 'quick-chickpeas', name: 'Ceci, pane integrale e verdure', slot: 'Pranzo', minutes: 10, vegetarian: true, ingredients: parts(['chickpeas', 180], ['bread', 70], ['veg', 200], ['oil', 10]), instructions: 'Usa ceci già cotti e scolati. Lava le verdure e servi con pane e olio dosato.' },
+  { id: 'quick-tofu', name: 'Tofu con pane e verdure', slot: 'Cena', minutes: 10, vegetarian: true, ingredients: parts(['tofu', 180], ['bread', 60], ['veg', 200], ['oil', 10]), instructions: 'Taglia il tofu seguendo le istruzioni sulla confezione, prepara le verdure e servi con pane e olio.' },
   { id: 'breakfast', name: 'Yogurt, avena e banana', slot: 'Colazione', minutes: 5, vegetarian: true, ingredients: parts(['yogurt', 170], ['oats', 50], ['banana', 100]), instructions: 'Mescola yogurt e avena, aggiungi la banana a pezzi.' },
   { id: 'snack', name: 'Mela e noci', slot: 'Spuntino', minutes: 2, vegetarian: true, ingredients: parts(['apple', 150], ['nuts', 20]), instructions: 'Lava la mela e accompagna con le noci sgusciate.' },
   { id: 'chicken-bowl', name: 'Pollo, riso e verdure', slot: 'Pranzo', minutes: 25, vegetarian: false, ingredients: parts(['chicken', 150], ['rice', 80], ['veg', 200], ['oil', 10]), instructions: 'Pesa riso e pollo crudi. Cuoci riso e pollo separatamente, aggiungi le verdure e l’olio dosato.' },
@@ -52,11 +56,58 @@ export function recipeMeal(recipe: FoodRecipe, factor = 1): Meal {
   const ingredients = recipe.ingredients.map(i => ({ ...i, grams: Math.round(i.grams * factor) }));
   return { id: crypto.randomUUID(), slot: recipe.slot, name: recipe.name, ...ingredientTotals(ingredients), checked: false, ingredients, recipeId: recipe.id, source: 'recipe' };
 }
-export function plannedMeals(diet: DietStyle, calories: number): Meal[] {
+export function plannedMeals(diet: DietStyle, calories: number, setup?: UserSetup, proteinTarget?: number): Meal[] {
   const ids = ['breakfast', 'snack', diet === 'vegetarian' || diet === 'mediterranean' ? 'chickpea-pasta' : 'chicken-bowl', 'merenda', diet === 'vegetarian' ? 'tofu-rice' : 'fish'];
-  const recipes = ids.map(id => FOOD_RECIPES.find(r => r.id === id)!);
-  const base = recipes.reduce((sum, r) => sum + ingredientTotals(r.ingredients).calories, 0);
-  return recipes.map(r => recipeMeal(r, calories / base));
+  const excluded = new Set(setup?.excludedFoods ?? []);
+  const suitable = FOOD_RECIPES.filter(recipe => (diet !== "vegetarian" || recipe.vegetarian) &&
+    recipe.ingredients.every(item => !excluded.has(item.foodId)));
+  const recipes = ids.flatMap(id => {
+    const preferred = suitable.find(recipe => recipe.id === id);
+    const slot = FOOD_RECIPES.find(recipe => recipe.id === id)?.slot;
+    const alternatives = suitable.filter(recipe => recipe.slot === slot);
+    const selected = setup?.cookTime === "low" ? [...alternatives].sort((a,b) => a.minutes - b.minutes)[0] : preferred ?? alternatives[0];
+    return selected ? [selected] : [];
+  });
+  if (!recipes.length) return [];
+  const bounds = (id: string) => id === "oil" ? [5, 25] : id === "nuts" ? [10, 40] : ["rice", "pasta", "oats", "bread"].includes(id) ? [20, 150] : [30, 400];
+  const base = recipes.reduce((sum, recipe) => sum + ingredientTotals(recipe.ingredients).calories, 0);
+  const meals = recipes.map(recipe => recipeMeal(recipe, calories / base));
+  for (const meal of meals) {
+    for (const ingredient of meal.ingredients ?? []) {
+      const [min, max] = bounds(ingredient.foodId);
+      ingredient.grams = Math.max(min, Math.min(max, ingredient.grams));
+    }
+    Object.assign(meal, ingredientTotals(meal.ingredients!));
+  }
+  // Bounded portion search balances the two declared targets while keeping food exclusions intact.
+  const score = () => {
+    const energy = meals.reduce((sum, meal) => sum + meal.calories, 0);
+    const protein = meals.reduce((sum, meal) => sum + meal.protein, 0);
+    return Math.pow((energy - calories) / calories, 2) * 4 +
+      (proteinTarget ? Math.pow((protein - proteinTarget) / proteinTarget, 2) : 0);
+  };
+  for (let pass = 0; pass < 40; pass++) {
+    let changed = false;
+    for (const meal of meals) for (const ingredient of meal.ingredients ?? []) {
+      const original = ingredient.grams;
+      let best = score();
+      let bestGrams = original;
+      for (const direction of [-1, 1]) {
+        const [min, max] = bounds(ingredient.foodId);
+        const amount = Math.max(min, Math.min(max, original + direction * 5));
+        ingredient.grams = amount;
+        Object.assign(meal, ingredientTotals(meal.ingredients!));
+        const candidate = score();
+        if (candidate < best) { best = candidate; bestGrams = amount; }
+      }
+      ingredient.grams = bestGrams;
+      Object.assign(meal, ingredientTotals(meal.ingredients!));
+      changed ||= bestGrams !== original;
+    }
+    if (!changed) break;
+  }
+  return meals;
+
 }
 export function shoppingFromMeals(meals: Meal[], days = 1): ShoppingItem[] {
   const totals = new Map<string, number>();
